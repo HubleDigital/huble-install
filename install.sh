@@ -338,7 +338,20 @@ fi
 step "Installing the Huble platform"
 if [ -d "$PLATFORM_DIR/.git" ]; then
   note "Updating existing platform checkout..."
-  git -C "$PLATFORM_DIR" pull --ff-only || note "Pull failed (local changes?) - keeping current version."
+  # Re-point the remote UNCONDITIONALLY (same rule as the npm-prefix rewrite):
+  # checkouts from before the org migration still aim at the old archived
+  # repo and every pull dies with "Repository not found" - silently pinning
+  # the whole machine to an ancient platform version.
+  git -C "$PLATFORM_DIR" remote set-url origin "https://github.com/$PLATFORM_REPO.git"
+  if ! git -C "$PLATFORM_DIR" pull --ff-only; then
+    # Shallow/grafted clones can refuse to fast-forward across history gaps.
+    # The platform checkout is tool-managed (never hand-edited), so resetting
+    # to the remote tip is safe and beats staying stale forever.
+    note "Fast-forward failed - resetting the tool-managed checkout to the latest platform."
+    git -C "$PLATFORM_DIR" fetch --depth 1 origin main \
+      && git -C "$PLATFORM_DIR" reset --hard FETCH_HEAD \
+      || note "Update failed - keeping current version (check network/access and re-run)."
+  fi
   # Older installs sparse-checked plugins/ too; narrow them to the pipeline.
   if [ -f "$PLATFORM_DIR/.git/info/sparse-checkout" ]; then
     git -C "$PLATFORM_DIR" sparse-checkout set --cone huble-pipeline 2>/dev/null || true
