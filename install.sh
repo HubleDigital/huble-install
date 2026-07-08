@@ -4,7 +4,7 @@
 #   and a client vault with the Atlas plugin preconfigured for your role.
 #
 # Usage (one line, run it again any time to update):
-#   curl -fsSL https://raw.githubusercontent.com/tastolini/huble-install/main/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/HubleDigital/huble-install/main/install.sh | bash
 #
 # Vaults are created in the folder you run the installer from (any drive);
 # tooling hides in ~/.huble.
@@ -12,7 +12,7 @@
 # Non-interactive overrides (mostly for testing):
 #   HUBLE_HOME=~/.huble           hidden tooling root (platform/node/npm/gh)
 #   HUBLE_VAULTS_DIR=/path        where vaults go (default: the launch folder)
-#   HUBLE_PLATFORM_REPO=tastolini/huble-platform
+#   HUBLE_PLATFORM_REPO=HubleDigital/huble-platform
 #   HUBLE_ROLE=cx|copy|seo|design|dev        skip the role prompt
 #                 (all still valid here — advanced, not shown in the menu)
 #   HUBLE_VAULT_MODE=new|clone|skip
@@ -75,7 +75,7 @@ migrate_legacy_home() {
   rmdir "$old" 2>/dev/null || true
 }
 migrate_legacy_home
-PLATFORM_REPO="${HUBLE_PLATFORM_REPO:-tastolini/huble-platform}"
+PLATFORM_REPO="${HUBLE_PLATFORM_REPO:-HubleDigital/huble-platform}"
 PLATFORM_DIR="$HUBLE_HOME/platform"
 # Vaults are USER-VISIBLE work and go where the installer is launched from -
 # run it from the folder (any drive) where you want client vaults to live.

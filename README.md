@@ -20,7 +20,7 @@ for poppler. If brew is already on the machine, the installer uses it where
 it helps.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/tastolini/huble-install/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/HubleDigital/huble-install/main/install.sh | bash
 ```
 
 Run it **from the folder where you want your client vaults** — secondary
