@@ -309,6 +309,31 @@ else
   gh auth login --hostname github.com --git-protocol https --web < /dev/tty
 fi
 
+# A valid login is not enough: the wrong account (personal vs work) passes
+# auth but dies later at the platform/vault clone with a cryptic GraphQL
+# "Could not resolve to a Repository" - and set -e then aborts the whole
+# install before the plugin step. Gate access HERE with a readable message
+# and offer one re-login with a different account.
+GH_LOGIN="$(gh api user --jq .login 2>/dev/null || echo '?')"
+if ! gh repo view "$PLATFORM_REPO" >/dev/null 2>&1; then
+  warn "Signed in as '$GH_LOGIN', but this account cannot access $PLATFORM_REPO."
+  note "Wrong account? Or this account was never given access - ask an admin"
+  note "to add you to the HubleDigital org / platform repo."
+  RELOGIN="n"
+  if ( : < /dev/tty ) 2>/dev/null; then
+    ask "  Sign in with a different GitHub account now? (y/N)" RELOGIN "n"
+  fi
+  case "$RELOGIN" in
+    [Yy]*)
+      gh auth login --hostname github.com --git-protocol https --web < /dev/tty
+      GH_LOGIN="$(gh api user --jq .login 2>/dev/null || echo '?')"
+      ;;
+  esac
+  gh repo view "$PLATFORM_REPO" >/dev/null 2>&1 \
+    || fail "Account '$GH_LOGIN' has no access to $PLATFORM_REPO - ask an admin to grant access, then re-run this installer."
+  ok "GitHub authenticated as $GH_LOGIN (platform access verified)"
+fi
+
 # ---------------------------------------------------------------- Platform repo
 step "Installing the Huble platform"
 if [ -d "$PLATFORM_DIR/.git" ]; then
@@ -422,7 +447,13 @@ case "$VAULT_MODE" in
     if [ -d "$VAULT_PATH/.git" ]; then
       git -C "$VAULT_PATH" pull --ff-only || true
     else
-      gh repo clone "$REPO" "$VAULT_PATH"
+      # Pre-check access so a wrong/unauthorized account gets guidance instead
+      # of a GraphQL error that kills the install before the plugin step.
+      if ! gh repo view "$REPO" >/dev/null 2>&1; then
+        fail "Cannot access $REPO as '$(gh api user --jq .login 2>/dev/null || echo '?')' - check the owner/name spelling and that THIS GitHub account was added to the repo (collaborator or org team), then re-run."
+      fi
+      gh repo clone "$REPO" "$VAULT_PATH" \
+        || fail "Clone of $REPO failed - see the git error above; fix it and re-run this installer (the vault plugin installs right after the clone, so nothing else was set up yet)."
     fi
     ;;
   new)
