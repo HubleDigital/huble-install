@@ -102,6 +102,25 @@ ask() { # ask "Prompt" varname [default]
   eval "$var=\"\$answer\""
 }
 
+clean_path() { # normalize a pasted/drag-and-dropped filesystem path
+  # Terminal drag-and-drop inserts shell escapes (My\ Shared\ Files) and
+  # users paste quoted paths — read -r keeps all of that literally, so the
+  # folder check fails on a perfectly good path. Strip surrounding quotes,
+  # drop backslash escapes, expand a leading ~, trim whitespace.
+  local p="$1"
+  p="${p#"${p%%[![:space:]]*}"}"; p="${p%"${p##*[![:space:]]}"}"
+  case "$p" in
+    \"*\") p="${p%\"}"; p="${p#\"}" ;;
+    \'*\') p="${p%\'}"; p="${p#\'}" ;;
+  esac
+  p="$(printf '%s' "$p" | sed 's/\\\(.\)/\1/g')"
+  case "$p" in
+    "~") p="$HOME" ;;
+    "~/"*) p="$HOME/${p#\~/}" ;;
+  esac
+  printf '%s' "$p"
+}
+
 ask_role() { # ask_role varname - prompt until one of the five menu roles
   local r
   while :; do
@@ -495,7 +514,7 @@ case "$VAULT_MODE" in
         else
           ask "  Update an existing vault's plugin/skills/commands too? (y/N)" UPDATE_VAULT "n"
           case "$UPDATE_VAULT" in
-            [Yy]*) ask "  Vault path" REINIT_VAULT ;;
+            [Yy]*) ask "  Vault path" REINIT_VAULT; REINIT_VAULT="$(clean_path "$REINIT_VAULT")" ;;
           esac
         fi
       fi
