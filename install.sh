@@ -369,7 +369,14 @@ if [ -d "$PLATFORM_DIR/.git" ]; then
     note "Fast-forward failed - resetting the tool-managed checkout to the latest platform."
     git -C "$PLATFORM_DIR" fetch --depth 1 origin main \
       && git -C "$PLATFORM_DIR" reset --hard FETCH_HEAD \
-      || note "Update failed - keeping current version (check network/access and re-run)."
+      || PLATFORM_UPDATE_FAILED=1
+  fi
+  if [ -n "${PLATFORM_UPDATE_FAILED:-}" ]; then
+    # A stale platform silently pins every vault this machine touches to an
+    # old plugin/pipeline (field incident: 0.1.0 plugin installed by cx init
+    # months after fixes shipped). Be LOUD here and again in the summary.
+    warn "PLATFORM NOT UPDATED - everything below installs the OLD version already on this machine."
+    warn "Usual cause: this GitHub account cannot read $PLATFORM_REPO (run: gh auth status) or no network."
   fi
   # Older installs sparse-checked plugins/ too; narrow them to the pipeline.
   if [ -f "$PLATFORM_DIR/.git/info/sparse-checkout" ]; then
@@ -712,6 +719,10 @@ if [ -n "$VAULT_PATH" ]; then
     note "Obsidian will ask you to trust the vault, then enable the Atlas plugin under Community plugins if prompted."
     note "If the vault does not open: in Obsidian's vault picker choose 'Open folder as vault' and select $VAULT_PATH"
   fi
+fi
+if [ -n "${PLATFORM_UPDATE_FAILED:-}" ]; then
+  printf '\033[31m  X PLATFORM NOT UPDATED - this machine is still on the OLD platform version.\033[0m\n' >&2
+  printf '\033[31m    Fix GitHub access to %s (gh auth status) or network, then re-run this installer.\033[0m\n' "$PLATFORM_REPO" >&2
 fi
 note "Platform: $PLATFORM_DIR  (re-run this installer any time to update everything)"
 note "The huble command works in NEW terminals (this one: run  source ~/.zshrc  first)."
