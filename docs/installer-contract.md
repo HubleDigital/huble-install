@@ -26,6 +26,7 @@ bootstrap once (with `HUBLE_VAULT_MODE=skip`) to create it.
 | `--version` | print the installer version and exit 0. |
 | `--refresh` | re-download `install.sh` from `HUBLE_INSTALL_URL` into `~/.huble/install.sh` and exit. Nothing else. |
 | `--check` | **read-only** update report and exit 0 (feature `check`). Never pulls, resets or installs. Fetches `origin/<default branch>` of `~/.huble/platform` and compares; downloads the installer at `HUBLE_INSTALL_URL` to compare versions. Offline → `unknown`, never an error. |
+| `--help` | usage. |
 
 `--check` output (json mode, one event; text mode two lines):
 
@@ -45,7 +46,6 @@ every render. "Update vault" is shown only when the vault's installed plugin
 (`<vault>/.obsidian/plugins/atlas-cx/manifest.json` `version`) differs from the
 one the platform ships (`~/.huble/platform/huble-pipeline/dist/atlas-cx/manifest.json`),
 which is what `cx init` installs; equal means no button.
-| `--help` | usage. |
 
 ### Environment
 
