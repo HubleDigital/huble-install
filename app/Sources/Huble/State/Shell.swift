@@ -18,7 +18,7 @@ enum Shell {
     /// Run a command to completion and capture both streams. Used for the small
     /// read-only queries (gh, git, huble vault list); installer runs go through
     /// InstallerRun, which streams.
-    static func run(_ executable: String, _ arguments: [String]) async throws -> CommandResult {
+    static func run(_ executable: String, _ arguments: [String], extraEnv: [String: String] = [:]) async throws -> CommandResult {
         try await withCheckedThrowingContinuation { cont in
             DispatchQueue.global(qos: .userInitiated).async {
                 let p = Process()
@@ -27,6 +27,7 @@ enum Shell {
                 var env = ProcessInfo.processInfo.environment
                 env["PATH"] = clientPATH + ":/opt/homebrew/bin:/usr/local/bin"
                 env["HOME"] = home
+                for (k, v) in extraEnv { env[k] = v }
                 p.environment = env
                 p.currentDirectoryURL = URL(fileURLWithPath: home)
                 let out = Pipe(), err = Pipe()

@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 
 struct LocalVault: Identifiable, Hashable {
@@ -8,6 +9,13 @@ struct LocalVault: Identifiable, Hashable {
     /// `owner/name` of the git origin, lowercased — the contract's rule for
     /// matching a local vault to a GitHub repo. nil without a git origin.
     let origin: String?
+    /// Installed Atlas plugin version (`.obsidian/plugins/atlas-cx/manifest.json`);
+    /// nil when the plugin is not installed in this vault.
+    let pluginVersion: String?
+    /// Obsidian is running and has this vault open (obsidian.json `open: true`).
+    /// Re-initialising an open vault swaps the plugin under the running app,
+    /// so the app sends the user to the vault's own Get Started page instead.
+    let openInObsidian: Bool
 }
 
 enum VaultScanner {
@@ -15,12 +23,16 @@ enum VaultScanner {
         let fm = FileManager.default
         var seen = Set<String>()
         var vaults: [LocalVault] = []
+        let obsidianRunning = !NSRunningApplication.runningApplications(withBundleIdentifier: "md.obsidian").isEmpty
+        let openPaths = obsidianRunning ? obsidianOpenVaultPaths() : []
 
         func add(_ path: String) {
             let p = (path as NSString).standardizingPath
             guard !seen.contains(p), isVault(p) else { return }
             seen.insert(p)
-            vaults.append(LocalVault(name: displayName(p), path: p, role: role(of: p), origin: origin(of: p)))
+            vaults.append(LocalVault(name: displayName(p), path: p, role: role(of: p), origin: origin(of: p),
+                                     pluginVersion: manifestVersion(at: p + "/.obsidian/plugins/atlas-cx/manifest.json"),
+                                     openInObsidian: openPaths.contains(p)))
         }
 
         if let dir = state.vaultsDir,
@@ -37,15 +49,24 @@ enum VaultScanner {
         return vaults
     }
 
-    static func obsidianVaultPaths() -> [String] {
+    private static func obsidianVaultEntries() -> [[String: Any]] {
         let cfg = Shell.home + "/Library/Application Support/obsidian/obsidian.json"
         guard let data = FileManager.default.contents(atPath: cfg),
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let vaults = obj["vaults"] as? [String: Any]
         else { return [] }
-        return vaults.values
-            .compactMap { ($0 as? [String: Any])?["path"] as? String }
-            .sorted()
+        return vaults.values.compactMap { $0 as? [String: Any] }
+    }
+
+    static func obsidianVaultPaths() -> [String] {
+        obsidianVaultEntries().compactMap { $0["path"] as? String }.sorted()
+    }
+
+    /// Vaults Obsidian currently has a window open for.
+    static func obsidianOpenVaultPaths() -> Set<String> {
+        Set(obsidianVaultEntries()
+            .filter { ($0["open"] as? Bool) == true }
+            .compactMap { ($0["path"] as? String).map { ($0 as NSString).standardizingPath } })
     }
 
     static func isVault(_ path: String) -> Bool {
@@ -80,6 +101,13 @@ enum VaultScanner {
         let parts = s.split(separator: "/").filter { !$0.isEmpty }
         guard parts.count >= 2 else { return nil }
         return "\(parts[parts.count - 2])/\(parts[parts.count - 1])".lowercased()
+    }
+
+    static func manifestVersion(at path: String) -> String? {
+        guard let data = FileManager.default.contents(atPath: path),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return nil }
+        return obj["version"] as? String
     }
 
     static func role(of path: String) -> String? {

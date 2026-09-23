@@ -53,9 +53,13 @@ topic) — pick a number, or type `owner/name`.
 a list of the projects on this Mac (your vaults folder plus every Huble
 vault Obsidian knows), **New project**, **Clone project** (picks from the
 tagged client vaults on GitHub), **Open project** (a vault folder already on
-this Mac), **Update**, **Open in Obsidian** and **Remove** (moves the folder to the Trash and
+this Mac), **Open in Obsidian** and **Remove** (moves the folder to the Trash and
 forgets it in Obsidian — the GitHub repository is never touched, and a vault
-with unsynced work asks twice). It has no logic of its own — every action runs the same
+with unsynced work asks twice). **Update platform** and **Update Atlas in
+this vault** appear only when an update actually exists (the installer's
+read-only `--check`, and the vault's plugin version vs the platform's); a
+vault that is open in Obsidian is updated from its own Get Started page
+instead. It has no logic of its own — every action runs the same
 `install.sh` headlessly and shows its progress, including the GitHub
 sign-in code when a first sign-in is needed. Build and signing notes are in
 `app/README.md`; until it is signed with a Developer ID it only runs on the

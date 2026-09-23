@@ -48,7 +48,8 @@ CONTRACT_VERSION="v1"
 #   platform-update-skip  HUBLE_PLATFORM_UPDATE=0 honoured
 #   remove                HUBLE_VAULT_MODE=remove (+ HUBLE_FORCE, fail.reason)
 #   reinit-open           a re-initialised vault is opened in Obsidian unless HUBLE_NO_OPEN
-CONTRACT_FEATURES="platform-update-skip remove reinit-open"
+#   check                 --check: read-only "is an update available" report
+CONTRACT_FEATURES="platform-update-skip remove reinit-open check"
 INSTALL_URL="${HUBLE_INSTALL_URL:-https://raw.githubusercontent.com/HubleDigital/huble-install/main/install.sh}"
 
 # Tooling lives hidden in ~/.huble (platform checkout, user-level node/npm/gh).
@@ -146,6 +147,7 @@ Huble installer $INSTALLER_VERSION (contract $CONTRACT_VERSION)
 
   --contract   print the contract version and exit
   --version    print the installer version and exit
+  --check      report whether a platform / installer update is available (read-only) and exit
   --refresh    re-download install.sh into $HUBLE_HOME/install.sh and exit
   --help       this text
 
@@ -172,9 +174,52 @@ print_contract() {
     printf 'huble-install features: %s\n' "$CONTRACT_FEATURES" >&3
   fi
 }
+# Read-only update check for GUI clients: they show "Update platform" only
+# when this says something is behind. Never pulls, resets or installs; a
+# network failure is reported as "unknown", not as an error (exit 0 always).
+# A dirty or ahead checkout is "blocked", never "available" - the update
+# path would refuse to reset it anyway.
+check_updates() {
+  local pdir="$HUBLE_HOME/platform" pstate="missing" branch="" fetched=false
+  local behind=null ahead=null dirty=false lrev="" rrev="" iremote=""
+  if [ -d "$pdir/.git" ]; then
+    pstate="ok"
+    branch="$(git -C "$pdir" symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed 's|^origin/||')"
+    [ -n "$branch" ] || branch="main"
+    lrev="$(git -C "$pdir" rev-parse --short HEAD 2>/dev/null || true)"
+    [ -n "$(git -C "$pdir" status --porcelain 2>/dev/null)" ] && dirty=true
+    if git -C "$pdir" -c http.lowSpeedLimit=1000 -c http.lowSpeedTime=20 fetch --quiet origin "$branch" >/dev/null 2>&1; then
+      fetched=true
+      rrev="$(git -C "$pdir" rev-parse --short "origin/$branch" 2>/dev/null || true)"
+      behind="$(git -C "$pdir" rev-list --count "HEAD..origin/$branch" 2>/dev/null || echo null)"
+      ahead="$(git -C "$pdir" rev-list --count "origin/$branch..HEAD" 2>/dev/null || echo null)"
+    fi
+  fi
+  iremote="$(curl -fsSL --max-time 20 "$INSTALL_URL" 2>/dev/null | sed -n 's/^INSTALLER_VERSION="\([^"]*\)".*/\1/p' | head -1)"
+  # One summary word so a client does not have to re-derive the rules.
+  local status="unknown"
+  if [ "$pstate" = "missing" ]; then status="missing"
+  elif $dirty || { [ "$ahead" != null ] && [ "$ahead" -gt 0 ]; }; then status="blocked"
+  elif $fetched && [ "$behind" != null ]; then
+    if [ "$behind" -gt 0 ]; then status="available"; else status="current"; fi
+  fi
+  local istatus="unknown"
+  if [ -n "$iremote" ]; then
+    if [ "$iremote" = "$INSTALLER_VERSION" ]; then istatus="current"; else istatus="available"; fi
+  fi
+  if $JSON_OUT; then
+    printf '{"event":"check","status":"%s","platform":{"state":"%s","behind":%s,"ahead":%s,"dirty":%s,"local":"%s","remote":"%s","branch":"%s"},"installer":{"status":"%s","local":"%s","remote":"%s"}}\n' \
+      "$status" "$pstate" "$behind" "$ahead" "$dirty" "$(json_escape "$lrev")" "$(json_escape "$rrev")" "$(json_escape "$branch")" \
+      "$istatus" "$INSTALLER_VERSION" "$(json_escape "$iremote")" >&3
+  else
+    printf 'platform: %s (local %s, remote %s, behind %s, ahead %s%s)\n' "$status" "${lrev:-?}" "${rrev:-?}" "$behind" "$ahead" "$($dirty && printf ', local changes')" >&3
+    printf 'installer: %s (local %s, remote %s)\n' "$istatus" "$INSTALLER_VERSION" "${iremote:-?}" >&3
+  fi
+}
 for arg in "$@"; do
   case "$arg" in
     --contract) print_contract; exit 0 ;;
+    --check) check_updates; exit 0 ;;
     --version) printf '%s\n' "$INSTALLER_VERSION" >&3; exit 0 ;;
     --refresh)
       refresh_self || fail "Could not download the installer from $INSTALL_URL."

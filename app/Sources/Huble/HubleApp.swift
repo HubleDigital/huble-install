@@ -30,7 +30,7 @@ struct RootView: View {
                 run: run,
                 onClose: {
                     model.activeRun = nil
-                    model.refresh()
+                    model.refresh(forceCheck: true)
                 },
                 onRemoveAnyway: run.action.removePath.map { path in
                     { model.run(.removeVault(path: path, force: true)) }

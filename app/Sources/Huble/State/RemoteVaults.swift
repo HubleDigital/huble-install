@@ -15,8 +15,8 @@ enum RemoteVaultsError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .noGitHubCLI: return "GitHub CLI (gh) is not installed yet — run “Update platform” first."
-        case .notSignedIn: return "Not signed in to GitHub — run “Update platform” to sign in."
+        case .noGitHubCLI: return "GitHub CLI (gh) is not installed yet — use “Set up GitHub” in the main window first."
+        case .notSignedIn: return "Not signed in to GitHub — use “Sign in to GitHub” in the main window first."
         case .command(let s): return s
         }
     }

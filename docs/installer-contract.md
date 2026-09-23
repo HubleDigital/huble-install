@@ -25,6 +25,26 @@ bootstrap once (with `HUBLE_VAULT_MODE=skip`) to create it.
 | `--contract` | print the contract line (text) or the `contract` event (json) and exit 0. No side effects. |
 | `--version` | print the installer version and exit 0. |
 | `--refresh` | re-download `install.sh` from `HUBLE_INSTALL_URL` into `~/.huble/install.sh` and exit. Nothing else. |
+| `--check` | **read-only** update report and exit 0 (feature `check`). Never pulls, resets or installs. Fetches `origin/<default branch>` of `~/.huble/platform` and compares; downloads the installer at `HUBLE_INSTALL_URL` to compare versions. Offline → `unknown`, never an error. |
+
+`--check` output (json mode, one event; text mode two lines):
+
+```
+{"event":"check","status":"current|available|blocked|missing|unknown",
+ "platform":{"state":"ok|missing","behind":3,"ahead":0,"dirty":false,"local":"fdc85a3","remote":"9a1c2e0","branch":"main"},
+ "installer":{"status":"current|available|unknown","local":"2.1.0","remote":"2.2.0"}}
+```
+
+Rules, so every client shows the same thing: a client shows **"Update platform"
+only when** `status == "available"` or `installer.status == "available"`.
+`blocked` (dirty or ahead checkout) shows the reason, never the button — the
+update path refuses to reset such a checkout anyway. `missing` offers setup.
+`unknown` shows nothing or a quiet "couldn't check". Re-check on launch, after
+each installer run and on an interval (the Huble app uses 30 minutes), not on
+every render. "Update vault" is shown only when the vault's installed plugin
+(`<vault>/.obsidian/plugins/atlas-cx/manifest.json` `version`) differs from the
+one the platform ships (`~/.huble/platform/huble-pipeline/dist/atlas-cx/manifest.json`),
+which is what `cx init` installs; equal means no button.
 | `--help` | usage. |
 
 ### Environment
@@ -93,7 +113,7 @@ show as a raw log. Clients must rely on events, not on stderr, for state.
 
 | event | fields | meaning |
 |---|---|---|
-| `contract` | `contract` ("v1"), `version`, `features` (array of strings) | always the first line. Clients refuse to continue on an unknown `contract`, and check `features` for the additive capabilities they rely on. Defined: `platform-update-skip`, `remove`, `reinit-open`. Text mode prints them on a second line `huble-install features: …`. |
+| `contract` | `contract` ("v1"), `version`, `features` (array of strings) | always the first line. Clients refuse to continue on an unknown `contract`, and check `features` for the additive capabilities they rely on. Defined: `platform-update-skip`, `remove`, `reinit-open`, `check`. Text mode prints them on a second line `huble-install features: …`. |
 | `step` | `message` | a new top-level step started (Checking Node.js, Installing the Huble platform, …) |
 | `ok` | `message` | step or sub-step succeeded |
 | `note` | `message` | informational |
@@ -107,7 +127,7 @@ show as a raw log. Clients must rely on events, not on stderr, for state.
 Example:
 
 ```
-{"event":"contract","contract":"v1","version":"2.1.0","features":["platform-update-skip","remove","reinit-open"]}
+{"event":"contract","contract":"v1","version":"2.1.0","features":["platform-update-skip","remove","reinit-open","check"]}
 {"event":"step","message":"Checking developer tools (git)"}
 {"event":"ok","message":"Command Line Tools present"}
 {"event":"gh_auth","code":"AB12-CD34","url":"https://github.com/login/device"}

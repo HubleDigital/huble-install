@@ -43,12 +43,40 @@ struct MainView: View {
         }
     }
 
+    /// "Update platform" appears only when `--check` reports an update; a
+    /// blocked checkout shows why; offline shows a quiet note. Same rule as
+    /// the Atlas plugin's Get Started page.
     private var footer: some View {
         HStack(spacing: 14) {
             Label(model.platformVersion.map { "Platform \($0)" } ?? "Platform not installed", systemImage: "cube")
             Label(model.githubLogin.map { "GitHub: \($0)" } ?? "GitHub: not signed in", systemImage: "person.crop.circle")
             Spacer()
-            Button("Update platform") { model.run(.updatePlatform()) }
+            if !model.ghInstalled {
+                Button("Set up GitHub") { model.run(.signInGitHub()) }
+            } else if model.githubLogin == nil {
+                Button("Sign in to GitHub") { model.run(.signInGitHub()) }
+            }
+            if model.checkingUpdates && model.updateCheck == nil {
+                ProgressView().controlSize(.mini)
+            } else if let c = model.updateCheck {
+                if c.updateAvailable {
+                    Button("Update platform") { model.run(.updatePlatform()) }
+                        .buttonStyle(.borderedProminent)
+                } else if c.blocked {
+                    Label("Update blocked: local changes in ~/.huble/platform", systemImage: "exclamationmark.triangle")
+                        .foregroundStyle(.orange)
+                        .help("Commit, stash or discard the changes in ~/.huble/platform, then the update becomes available.")
+                } else if c.status == "current" {
+                    Label("Up to date", systemImage: "checkmark.circle")
+                } else if c.status == "missing" {
+                    Button("Install platform") { model.run(.setup()) }
+                } else {
+                    Label("Couldn't check for updates", systemImage: "wifi.slash")
+                        .help("No network, or GitHub unreachable. Checked again on the next launch.")
+                }
+            } else if model.installerPresent {
+                Label("Couldn't check for updates", systemImage: "wifi.slash")
+            }
         }
         .font(.callout)
         .foregroundStyle(.secondary)
@@ -61,6 +89,7 @@ private struct VaultRow: View {
     @Environment(AppModel.self) private var model
     let vault: LocalVault
     @State private var confirmRemove = false
+    @State private var openVaultNotice = false
 
     var body: some View {
         HStack(spacing: 12) {
@@ -77,7 +106,24 @@ private struct VaultRow: View {
             }
             Spacer()
             Button("Remove…") { confirmRemove = true }
-            Button("Update vault") { model.run(.updateVault(path: vault.path)) }
+            // Only when the vault's installed plugin differs from the one the
+            // platform ships (what cx init installs) — equal means nothing to do.
+            // Not a sync: it re-installs plugin/skills/commands, nothing else.
+            if model.vaultNeedsUpdate(vault) {
+                Button("Update Atlas in this vault") {
+                    // Open in Obsidian: re-initialising would swap the plugin under
+                    // the running app. The vault's own Get Started page updates it
+                    // in place, so send the user there instead of running here.
+                    if vault.openInObsidian { openVaultNotice = true } else { model.run(.updateVault(path: vault.path)) }
+                }
+                .help(vault.pluginVersion.map { "Atlas \($0) installed, platform ships \(model.platformPluginVersion ?? "?"). Re-installs the plugin, skills and commands — does not sync project files." } ?? "Atlas plugin not installed in this vault")
+                .confirmationDialog("“\(vault.name)” is open in Obsidian", isPresented: $openVaultNotice, titleVisibility: .visible) {
+                    Button("Open in Obsidian") { Obsidian.open(vaultPath: vault.path) }
+                    Button("Cancel", role: .cancel) {}
+                } message: {
+                    Text("Update it from inside the vault: Obsidian → Get Started → Update platform. That updates Atlas in place without swapping files under the running app.")
+                }
+            }
             Button("Open in Obsidian") { Obsidian.open(vaultPath: vault.path) }
                 .buttonStyle(.borderedProminent)
         }
