@@ -7,23 +7,166 @@
 #   curl -fsSL https://raw.githubusercontent.com/HubleDigital/huble-install/main/install.sh | bash
 #
 # Vaults are created in the folder you run the installer from (any drive);
-# tooling hides in ~/.huble.
+# tooling hides in ~/.huble. Every successful run also saves a copy of this
+# script to ~/.huble/install.sh so GUI clients (the Huble app, the Atlas
+# plugin) can run it locally without a terminal.
 #
-# Non-interactive overrides (mostly for testing):
+# This script is the single implementation of "set up this Mac", "new
+# project", "open existing project" and "update". GUI clients only collect
+# input and drive it through the environment variables below - the full
+# contract (events, exit codes, state file) is docs/installer-contract.md.
+#
+# Flags:  --contract | --version | --refresh | --help
+#
+# Non-interactive overrides:
+#   HUBLE_OUTPUT=text|json        json: one event per stdout line (contract)
+#   HUBLE_NONINTERACTIVE=1        never prompt (implied without a terminal)
 #   HUBLE_HOME=~/.huble           hidden tooling root (platform/node/npm/gh)
-#   HUBLE_VAULTS_DIR=/path        where vaults go (default: the launch folder)
+#   HUBLE_VAULTS_DIR=/path        where vaults go (default: launch folder, then
+#                                 the folder remembered in installer.json)
 #   HUBLE_PLATFORM_REPO=HubleDigital/huble-platform
-#   HUBLE_ROLE=cx|copy|seo|design|dev        skip the role prompt
-#                 (all still valid here — advanced, not shown in the menu)
+#   HUBLE_ROLE=cx|copy|seo|design|dev|all    skip the role prompt
+#                 (all = orchestrator/test machines, not shown in the menu)
 #   HUBLE_VAULT_MODE=new|clone|skip
 #   HUBLE_VAULT_REINIT=/path|no   with skip: re-init that vault (or don't ask)
 #   HUBLE_CLIENT_NAME="Client"    with HUBLE_VAULT_MODE=new
 #   HUBLE_VAULT_REPO=owner/repo   with HUBLE_VAULT_MODE=clone
+#   HUBLE_VAULT_ORG=HubleDigital  org whose topic-tagged repos are client vaults
+#   HUBLE_VAULT_TOPIC=guerilla-client-vault
+#   HUBLE_INSTALL_URL=...         where --refresh / the self-copy download from
 #   HUBLE_NO_OPEN=1               don't open Obsidian at the end
 set -euo pipefail
 
+INSTALLER_VERSION="2.0.0"
+CONTRACT_VERSION="v1"
+INSTALL_URL="${HUBLE_INSTALL_URL:-https://raw.githubusercontent.com/HubleDigital/huble-install/main/install.sh}"
+
 # Tooling lives hidden in ~/.huble (platform checkout, user-level node/npm/gh).
 HUBLE_HOME="${HUBLE_HOME:-$HOME/.huble}"
+INSTALLER_STATE="$HUBLE_HOME/installer.json"
+
+# ---------------------------------------------------------------- Output + prompts
+# Two output modes. text: coloured, human. json (HUBLE_OUTPUT=json): stdout
+# carries ONLY newline-delimited events for a GUI client; everything the
+# subcommands print (git, npm, curl, gh) is redirected to stderr as a raw log.
+# fd 3 is always "the event channel" so helpers never care which mode is on.
+OUTPUT_MODE="${HUBLE_OUTPUT:-text}"
+case "$OUTPUT_MODE" in text|json) ;; *) OUTPUT_MODE="text" ;; esac
+exec 3>&1
+JSON_OUT=false
+if [ "$OUTPUT_MODE" = "json" ]; then JSON_OUT=true; exec 1>&2; fi
+
+# Prompts need a terminal. No terminal, or HUBLE_NONINTERACTIVE=1, means a
+# GUI client is driving: every answer must come from the environment, and
+# nothing may block on sudo or a password.
+INTERACTIVE=true
+if [ -n "${HUBLE_NONINTERACTIVE:-}" ] || ! ( : < /dev/tty ) 2>/dev/null; then INTERACTIVE=false; fi
+
+json_escape() { # json_escape "text" -> escaped for a JSON string (no quotes)
+  printf '%s' "$1" | tr -d '\000-\010\013-\037' | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e 's/\t/\\t/g'
+}
+emit() { # emit event key value [key value ...] - one JSON event line on fd 3
+  local ev="$1" out; shift
+  out="{\"event\":\"$ev\""
+  while [ "$#" -ge 2 ]; do
+    case "$2" in
+      true|false) out="$out,\"$1\":$2" ;;
+      *) out="$out,\"$1\":\"$(json_escape "$2")\"" ;;
+    esac
+    shift 2
+  done
+  printf '%s}\n' "$out" >&3
+}
+
+CURRENT_STEP=""
+FAIL_EMITTED=false
+bold()  { $JSON_OUT || printf '\033[1m%s\033[0m\n' "$*" >&3; }
+step()  { CURRENT_STEP="$*"; if $JSON_OUT; then emit step message "$*"; else printf '\n\033[1;34m==>\033[0m \033[1m%s\033[0m\n' "$*" >&3; fi; }
+ok()    { if $JSON_OUT; then emit ok message "$*";    else printf '\033[32m  OK %s\033[0m\n' "$*" >&3; fi; }
+warn()  { if $JSON_OUT; then emit warn message "$*";  else printf '\033[33m  ! %s\033[0m\n' "$*" >&3; fi; }
+note()  { if $JSON_OUT; then emit note message "$*";  else printf '  - %s\n' "$*" >&3; fi; }
+err()   { if $JSON_OUT; then emit error message "$*"; else printf '\033[31m  X %s\033[0m\n' "$*" >&3; fi; } # loud, non-fatal
+fail()  {
+  FAIL_EMITTED=true
+  $JSON_OUT && emit fail message "$*"
+  printf '\033[31m  X %s\033[0m\n' "$*" >&2
+  exit 1
+}
+# A command dying under set -e never reaches fail(): tell the client which
+# step broke instead of leaving it with a bare exit code.
+on_exit() {
+  local rc=$?
+  if [ "$rc" -ne 0 ] && ! $FAIL_EMITTED; then
+    FAIL_EMITTED=true
+    $JSON_OUT && emit fail message "Step '${CURRENT_STEP:-startup}' failed (exit $rc) - see the log above."
+    printf '\033[31m  X Step %s failed (exit %s) - see the output above.\033[0m\n' "'${CURRENT_STEP:-startup}'" "$rc" >&2
+  fi
+}
+trap on_exit EXIT
+
+# Reading prompts must come from the terminal even when the script itself is
+# piped in via curl | bash. Non-interactive: the default is the answer, and a
+# prompt without a default is a missing value the client forgot to pass.
+ask() { # ask "Prompt" varname [default] [ENV_HINT]
+  local prompt="$1" var="$2" default="${3:-}" hint="${4:-}" answer
+  if ! $INTERACTIVE; then
+    if [ -n "$default" ]; then eval "$var=\"\$default\""; return 0; fi
+    fail "Non-interactive run: no value for '$(printf '%s' "$prompt" | sed 's/^ *//')'${hint:+ - set $hint}."
+  fi
+  if [ -n "$default" ]; then prompt="$prompt [$default]"; fi
+  printf '%s: ' "$prompt" > /dev/tty
+  IFS= read -r answer < /dev/tty || answer=""
+  if [ -z "$answer" ]; then answer="$default"; fi
+  eval "$var=\"\$answer\""
+}
+
+# curl progress bars are terminal-only; a GUI client just wants silence.
+if $INTERACTIVE && ! $JSON_OUT; then CURL_PROGRESS="--progress-bar"; else CURL_PROGRESS="-sS"; fi
+
+# ---------------------------------------------------------------- Flags
+usage() {
+  cat >&3 <<EOF
+Huble installer $INSTALLER_VERSION (contract $CONTRACT_VERSION)
+
+  curl -fsSL $INSTALL_URL | bash            set up / update this Mac
+  bash ~/.huble/install.sh [--flag]         same, from the saved local copy
+
+  --contract   print the contract version and exit
+  --version    print the installer version and exit
+  --refresh    re-download install.sh into $HUBLE_HOME/install.sh and exit
+  --help       this text
+
+Environment overrides: see the header of this script or docs/installer-contract.md.
+EOF
+}
+refresh_self() { # download the current installer into $HUBLE_HOME/install.sh
+  local tmp="$HUBLE_HOME/install.sh.tmp"
+  mkdir -p "$HUBLE_HOME"
+  if curl -fsSL "$INSTALL_URL" -o "$tmp" && grep -q '^INSTALLER_VERSION=' "$tmp"; then
+    mv -f "$tmp" "$HUBLE_HOME/install.sh" && chmod +x "$HUBLE_HOME/install.sh"
+    return 0
+  fi
+  rm -f "$tmp"
+  return 1
+}
+for arg in "$@"; do
+  case "$arg" in
+    --contract)
+      if $JSON_OUT; then emit contract contract "$CONTRACT_VERSION" version "$INSTALLER_VERSION"; else printf 'huble-install contract %s\n' "$CONTRACT_VERSION" >&3; fi
+      exit 0 ;;
+    --version) printf '%s\n' "$INSTALLER_VERSION" >&3; exit 0 ;;
+    --refresh)
+      refresh_self || fail "Could not download the installer from $INSTALL_URL."
+      ok "Installer saved to $HUBLE_HOME/install.sh"
+      exit 0 ;;
+    --help|-h) usage; exit 0 ;;
+    *) fail "Unknown flag '$arg' (try --help)." ;;
+  esac
+done
+
+# The contract line is ALWAYS the first thing on stdout - a client checks it
+# before trusting anything else.
+if $JSON_OUT; then emit contract contract "$CONTRACT_VERSION" version "$INSTALLER_VERSION"; else printf 'huble-install contract %s\n' "$CONTRACT_VERSION" >&3; fi
 
 # One-time migration from the old visible ~/Huble layout: move the tooling
 # dirs into ~/.huble, repoint vault pipelineRoot configs and the .zprofile
@@ -35,11 +178,11 @@ migrate_legacy_home() {
   # outlive the old folder (and a stale prefix resurrects it on any npm -g).
   if [ -f "$HOME/.npmrc" ] && grep -qs "$old" "$HOME/.npmrc"; then
     sed -i '' "s|$old/|$HUBLE_HOME/|g" "$HOME/.npmrc" 2>/dev/null || true
-    printf '  - Repointed npm prefix in ~/.npmrc\n'
+    note "Repointed npm prefix in ~/.npmrc"
   fi
   if [ -f "$HOME/.zprofile" ] && grep -qs "$old" "$HOME/.zprofile"; then
     sed -i '' "s|$old/|$HUBLE_HOME/|g" "$HOME/.zprofile" 2>/dev/null || true
-    printf '  - Repointed PATH block in ~/.zprofile\n'
+    note "Repointed PATH block in ~/.zprofile"
   fi
   [ -d "$old" ] || return 0
   # Tooling dirs found under the old layout move over (idempotent - also
@@ -48,7 +191,7 @@ migrate_legacy_home() {
   mkdir -p "$HUBLE_HOME"
   for d in platform node npm-global bin; do
     if [ -e "$old/$d" ] && [ ! -e "$HUBLE_HOME/$d" ]; then
-      $moved || printf '  - Migrating tooling from %s to %s...\n' "$old" "$HUBLE_HOME"
+      $moved || note "Migrating tooling from $old to $HUBLE_HOME..."
       moved=true
       mv "$old/$d" "$HUBLE_HOME/$d"
     fi
@@ -77,30 +220,17 @@ migrate_legacy_home() {
 migrate_legacy_home
 PLATFORM_REPO="${HUBLE_PLATFORM_REPO:-HubleDigital/huble-platform}"
 PLATFORM_DIR="$HUBLE_HOME/platform"
-# Vaults are USER-VISIBLE work and go where the installer is launched from -
-# run it from the folder (any drive) where you want client vaults to live.
+# Vaults are USER-VISIBLE work. Precedence: HUBLE_VAULTS_DIR, then the folder
+# the installer was launched from when that is a deliberate choice (not $HOME,
+# not /), then the folder remembered in installer.json, then $HOME. The
+# installer.json lookup needs Node, so the final value is resolved at the
+# vault step (resolve_vaults_dir), not here.
 LAUNCH_DIR="$(pwd)"
 if [ "$LAUNCH_DIR" = "/" ] || [ ! -w "$LAUNCH_DIR" ]; then LAUNCH_DIR="$HOME"; fi
 VAULTS_DIR="${HUBLE_VAULTS_DIR:-$LAUNCH_DIR}"
 MIN_NODE_MAJOR=24   # the dex task CLI (@zeeg/dex) requires Node >= 24
-
-bold()  { printf '\033[1m%s\033[0m\n' "$*"; }
-step()  { printf '\n\033[1;34m==>\033[0m \033[1m%s\033[0m\n' "$*"; }
-ok()    { printf '\033[32m  OK %s\033[0m\n' "$*"; }
-warn()  { printf '\033[33m  ! %s\033[0m\n' "$*"; }
-note()  { printf '  - %s\n' "$*"; }
-fail()  { printf '\033[31m  X %s\033[0m\n' "$*" >&2; exit 1; }
-
-# Reading prompts must come from the terminal even when the script itself is
-# piped in via curl | bash.
-ask() { # ask "Prompt" varname [default]
-  local prompt="$1" var="$2" default="${3:-}" answer
-  if [ -n "$default" ]; then prompt="$prompt [$default]"; fi
-  printf '%s: ' "$prompt" > /dev/tty
-  IFS= read -r answer < /dev/tty || answer=""
-  if [ -z "$answer" ]; then answer="$default"; fi
-  eval "$var=\"\$answer\""
-}
+VAULT_ORG="${HUBLE_VAULT_ORG:-HubleDigital}"
+VAULT_TOPIC="${HUBLE_VAULT_TOPIC:-guerilla-client-vault}"
 
 clean_path() { # normalize a pasted/drag-and-dropped filesystem path
   # Terminal drag-and-drop inserts shell escapes (My\ Shared\ Files) and
@@ -121,14 +251,16 @@ clean_path() { # normalize a pasted/drag-and-dropped filesystem path
   printf '%s' "$p"
 }
 
-ask_role() { # ask_role varname - prompt until one of the five menu roles
-  local r
+valid_role() { case "$1" in cx|copy|seo|design|dev|all) return 0 ;; *) return 1 ;; esac; }
+ask_role() { # ask_role varname [default] - prompt until a valid role
+  # Interactive runs default to cx; a GUI client must pass HUBLE_ROLE (or
+  # have a stored default) - never silently pick a role for it.
+  local r default="${2:-}"
+  if $INTERACTIVE && [ -z "$default" ]; then default="cx"; fi
   while :; do
-    ask "  Your role (cx / copy / seo / design / dev)" r "cx"
-    case "$r" in
-      cx|copy|seo|design|dev) break ;;
-      *) warn "Unknown role '$r' - choose one of: cx / copy / seo / design / dev" ;;
-    esac
+    ask "  Your role (cx / copy / seo / design / dev)" r "$default" HUBLE_ROLE
+    if valid_role "$r"; then break; fi
+    warn "Unknown role '$r' - choose one of: cx / copy / seo / design / dev"
   done
   eval "$1=\"\$r\""
 }
@@ -164,8 +296,16 @@ ARCH="$(uname -m)"   # arm64 or x86_64
 IS_ADMIN=false
 if groups 2>/dev/null | tr ' ' '\n' | grep -qx admin; then IS_ADMIN=true; fi
 
-# Make user-level tool locations visible to this run AND future shells.
+# Make user-level tool locations visible to this run AND future shells. A GUI
+# client (Obsidian, the Huble app) passes a bare PATH without the login
+# profile, so Homebrew's dirs are appended too - AFTER ours, so a brew node
+# never shadows the toolchain the installer manages.
 export PATH="$HUBLE_HOME/bin:$HUBLE_HOME/node/bin:$HUBLE_HOME/npm-global/bin:$PATH"
+for extra in "$HOME/.local/bin" /opt/homebrew/bin /usr/local/bin /usr/bin /bin /usr/sbin /sbin; do
+  [ -d "$extra" ] || continue
+  case ":$PATH:" in *":$extra:"*) ;; *) PATH="$PATH:$extra" ;; esac
+done
+export PATH
 ensure_path_persisted() {
   # ~/.zprofile is the primary (macOS ships zsh), but a customized ~/.zshrc
   # that resets PATH runs AFTER it and silently drops our block - seen in the
@@ -185,10 +325,9 @@ ensure_path_persisted() {
 }
 
 bold ""
-bold "Huble platform installer"
+bold "Huble platform installer $INSTALLER_VERSION"
 note "Tooling (hidden): $HUBLE_HOME"
-note "Vaults go to: $VAULTS_DIR  (run the installer from the folder where you want them)"
-mkdir -p "$HUBLE_HOME" "$VAULTS_DIR"
+mkdir -p "$HUBLE_HOME"
 # Persist the PATH block unconditionally - brew-based installs never hit the
 # fallback branches that used to be the only callers, so `huble` (and any
 # user-level tooling) was missing from new terminals on those machines.
@@ -216,15 +355,16 @@ else
     | sed -n 's/.*"browser_download_url": *"\([^"]*\.dmg\)".*/\1/p' | head -1)"
   [ -n "$OBS_URL" ] || fail "Could not find the Obsidian .dmg download URL."
   OBS_DMG="/tmp/Obsidian-latest.dmg"
-  curl -fL --progress-bar -o "$OBS_DMG" "$OBS_URL"
+  curl -fL $CURL_PROGRESS -o "$OBS_DMG" "$OBS_URL"
   # Admins install system-wide; everyone else gets ~/Applications (works the
-  # same, no password needed).
-  if $IS_ADMIN || [ -w /Applications ]; then APP_DIR="/Applications"; else APP_DIR="$HOME/Applications"; fi
+  # same, no password needed). A GUI client cannot answer a sudo prompt, so
+  # non-interactive runs only use /Applications when it is writable as-is.
+  if [ -w /Applications ] || { $IS_ADMIN && $INTERACTIVE; }; then APP_DIR="/Applications"; else APP_DIR="$HOME/Applications"; fi
   mkdir -p "$APP_DIR"
   note "Installing to $APP_DIR..."
   MOUNT_DIR="$(hdiutil attach "$OBS_DMG" -nobrowse -readonly | sed -n 's/.*\(\/Volumes\/.*\)/\1/p' | tail -1)"
   if ! cp -R "$MOUNT_DIR/Obsidian.app" "$APP_DIR/" 2>/dev/null; then
-    if $IS_ADMIN; then
+    if $IS_ADMIN && $INTERACTIVE; then
       note "Needs your password to write to $APP_DIR..."
       sudo cp -R "$MOUNT_DIR/Obsidian.app" "$APP_DIR/"
     else
@@ -278,7 +418,7 @@ else
     fi
     note "Installing Node $NODE_VER into $HUBLE_HOME/node (no password needed)..."
     NODE_TAR="/tmp/node-$NODE_VER.tar.gz"
-    curl -fL --progress-bar -o "$NODE_TAR" "https://nodejs.org/dist/$NODE_VER/node-$NODE_VER-darwin-$NODE_ARCH.tar.gz"
+    curl -fL $CURL_PROGRESS -o "$NODE_TAR" "https://nodejs.org/dist/$NODE_VER/node-$NODE_VER-darwin-$NODE_ARCH.tar.gz"
     rm -rf "$HUBLE_HOME/node"
     mkdir -p "$HUBLE_HOME/node"
     tar -xzf "$NODE_TAR" -C "$HUBLE_HOME/node" --strip-components 1
@@ -310,7 +450,7 @@ if ! command -v gh >/dev/null 2>&1; then
       *)     GH_ARCH="macOS_amd64" ;;
     esac
     GH_ZIP="/tmp/gh.zip"
-    curl -fL --progress-bar -o "$GH_ZIP" \
+    curl -fL $CURL_PROGRESS -o "$GH_ZIP" \
       "https://github.com/cli/cli/releases/download/$GH_TAG/gh_${GH_VER}_${GH_ARCH}.zip"
     mkdir -p "$HUBLE_HOME/bin"
     ditto -xk "$GH_ZIP" /tmp/gh-extract
@@ -321,11 +461,40 @@ if ! command -v gh >/dev/null 2>&1; then
   fi
 fi
 ok "GitHub CLI present"
+# Device-code sign-in. With a terminal gh drives it itself. Without one, gh
+# still prints the one-time code + URL and polls (verified: gh 2.96 with
+# stdin at /dev/null) - relay them as a gh_auth event so the GUI client can
+# show the code and open the browser, and keep gh running until it's done.
+gh_login() {
+  if $INTERACTIVE; then
+    gh auth login --hostname github.com --git-protocol https --web < /dev/tty
+    return
+  fi
+  local line code="" url="" sent=false
+  set +e
+  gh auth login --hostname github.com --git-protocol https --web </dev/null 2>&1 \
+    | while IFS= read -r line; do
+        printf '%s\n' "$line" >&2
+        case "$line" in
+          *one-time\ code:*) code="$(printf '%s' "$line" | sed -n 's/.*one-time code: *\([A-Z0-9-]*\).*/\1/p')" ;;
+          *https://github.com/login/device*) url="$(printf '%s' "$line" | sed -n 's/.*\(https:\/\/github\.com\/login\/device[^ ]*\).*/\1/p')" ;;
+        esac
+        if ! $sent && [ -n "$code" ] && [ -n "$url" ]; then
+          sent=true
+          if $JSON_OUT; then emit gh_auth code "$code" url "$url"; else
+            note "GitHub sign-in: open $url and enter the code $code"
+          fi
+        fi
+      done
+  local rc=${PIPESTATUS[0]}
+  set -e
+  [ "$rc" -eq 0 ] || fail "GitHub sign-in did not complete (gh exit $rc). Re-run to try again."
+}
 if gh auth status >/dev/null 2>&1; then
   ok "GitHub authenticated as $(gh api user --jq .login 2>/dev/null || echo '?')"
 else
   note "Sign in to GitHub - a browser window will guide you (device code flow)."
-  gh auth login --hostname github.com --git-protocol https --web < /dev/tty
+  gh_login
 fi
 
 # A valid login is not enough: the wrong account (personal vs work) passes
@@ -339,12 +508,12 @@ if ! gh repo view "$PLATFORM_REPO" >/dev/null 2>&1; then
   note "Wrong account? Or this account was never given access - ask an admin"
   note "to add you to the HubleDigital org / platform repo."
   RELOGIN="n"
-  if ( : < /dev/tty ) 2>/dev/null; then
+  if $INTERACTIVE; then
     ask "  Sign in with a different GitHub account now? (y/N)" RELOGIN "n"
   fi
   case "$RELOGIN" in
     [Yy]*)
-      gh auth login --hostname github.com --git-protocol https --web < /dev/tty
+      gh_login
       GH_LOGIN="$(gh api user --jq .login 2>/dev/null || echo '?')"
       ;;
   esac
@@ -411,7 +580,7 @@ else
   note "Installing Claude Code..."
   claude_installed=true
   if ! npm install -g @anthropic-ai/claude-code </dev/null >/dev/null 2>&1; then
-    if $IS_ADMIN; then
+    if $IS_ADMIN && $INTERACTIVE; then
       sudo npm install -g @anthropic-ai/claude-code </dev/null >/dev/null || claude_installed=false
     else
       # npm's global prefix is not writable: use a user-level prefix instead.
@@ -439,7 +608,7 @@ else
   # admins, then a user-level npm prefix for everyone else.
   dex_installed=true
   if ! npm install -g @zeeg/dex </dev/null >/dev/null 2>&1; then
-    if $IS_ADMIN; then
+    if $IS_ADMIN && $INTERACTIVE; then
       sudo npm install -g @zeeg/dex </dev/null >/dev/null || dex_installed=false
     else
       # npm's global prefix is not writable: use a user-level prefix instead.
@@ -456,14 +625,39 @@ else
   fi
 fi
 
+# ---------------------------------------------------------------- Installer state
+# ~/.huble/installer.json remembers this machine's defaults (role, vaults
+# folder, last vault). It replaces the old ~/.huble/machine.json, whose name
+# collided with the per-vault <vault>/.huble/machine.json written by cx init.
+# The vault's own file always wins for that vault; installer.json is only
+# the default the installer offers. Needs Node (json helpers) - so it lives
+# after the toolchain steps.
+if [ -f "$HUBLE_HOME/machine.json" ] && [ ! -f "$INSTALLER_STATE" ]; then
+  OLD_LAST="$(json_read "$HUBLE_HOME/machine.json" lastVault)"
+  [ -n "$OLD_LAST" ] && json_write "$INSTALLER_STATE" lastVault "$OLD_LAST"
+  rm -f "$HUBLE_HOME/machine.json"
+  note "Migrated ~/.huble/machine.json to installer.json"
+fi
+STORED_ROLE="$(json_read "$INSTALLER_STATE" role)"
+STORED_VAULTS_DIR="$(json_read "$INSTALLER_STATE" vaultsDir)"
+if [ -z "${HUBLE_VAULTS_DIR:-}" ] && [ "$LAUNCH_DIR" = "$HOME" ] && [ -n "$STORED_VAULTS_DIR" ] && [ -d "$STORED_VAULTS_DIR" ]; then
+  VAULTS_DIR="$STORED_VAULTS_DIR"
+fi
+
 # ---------------------------------------------------------------- Client vault
 step "Setting up a client vault"
 VAULT_MODE="${HUBLE_VAULT_MODE:-}"
+case "$VAULT_MODE" in
+  new|clone|skip|"") ;;
+  *) fail "HUBLE_VAULT_MODE must be new, clone or skip (got '$VAULT_MODE')." ;;
+esac
 if [ -z "$VAULT_MODE" ]; then
-  printf '  How do you want to start?\n' > /dev/tty
-  printf '    1) Clone an existing client vault from GitHub\n' > /dev/tty
-  printf '    2) Create a new client vault\n' > /dev/tty
-  printf '    3) Skip - I already have my vault\n' > /dev/tty
+  if $INTERACTIVE; then
+    printf '  How do you want to start?\n' > /dev/tty
+    printf '    1) Clone an existing client vault from GitHub\n' > /dev/tty
+    printf '    2) Create a new client vault\n' > /dev/tty
+    printf '    3) Skip - I already have my vault\n' > /dev/tty
+  fi
   ask "  Choose 1/2/3" choice "3"
   case "$choice" in
     1) VAULT_MODE="clone" ;;
@@ -475,17 +669,67 @@ fi
 # Role comes BEFORE vault setup so every install step (vault init included)
 # is role-scoped from the start — no all-roles install followed by a re-filter.
 ROLE="${HUBLE_ROLE:-}"
-if [ "$VAULT_MODE" != "skip" ] && [ -z "$ROLE" ]; then
-  note "Your role sets the Atlas Inspector tab and installs only that stage's"
-  note "tooling + a sparse checkout of its slice of the vault."
-  ask_role ROLE
+if [ -n "$ROLE" ] && ! valid_role "$ROLE"; then
+  fail "HUBLE_ROLE must be one of cx, copy, seo, design, dev, all (got '$ROLE')."
 fi
+if [ "$VAULT_MODE" != "skip" ] && [ -z "$ROLE" ]; then
+  if $INTERACTIVE; then
+    note "Your role sets the Atlas Inspector tab and installs only that stage's"
+    note "tooling + a sparse checkout of its slice of the vault."
+  fi
+  ask_role ROLE "$STORED_ROLE"
+fi
+
+if [ "$VAULT_MODE" != "skip" ]; then
+  mkdir -p "$VAULTS_DIR" || fail "Cannot create the vaults folder $VAULTS_DIR."
+  note "Vaults folder: $VAULTS_DIR"
+fi
+
+# Client vaults are the org repos tagged with the vault topic - names carry
+# no signal (other teams create client-* repos that are not vaults). gh only
+# lists what THIS account can read, so the list is already role/team scoped.
+list_vault_repos() { # -> lines of "owner/name<TAB>description", sorted by name
+  gh repo list "$VAULT_ORG" --topic "$VAULT_TOPIC" --limit 500 \
+    --json nameWithOwner,description --jq 'sort_by(.nameWithOwner)[] | [.nameWithOwner, (.description // "")] | @tsv' 2>/dev/null
+}
+choose_vault_repo() { # interactive: numbered list from GitHub, or a typed owner/name
+  local repos n i line pick
+  note "Looking up client vaults on GitHub ($VAULT_ORG, topic $VAULT_TOPIC)..."
+  repos="$(list_vault_repos || true)"
+  if [ -z "$repos" ]; then
+    note "No tagged client vaults visible to this account (or the lookup failed)."
+    ask "  Vault repo (owner/name)" REPO "" HUBLE_VAULT_REPO
+    return
+  fi
+  n=0
+  while IFS=$'\t' read -r line _; do
+    n=$((n+1))
+    printf '    %2d) %s\n' "$n" "$line" > /dev/tty
+  done <<< "$repos"
+  while :; do
+    ask "  Choose a number, or type owner/name" pick ""
+    case "$pick" in
+      */*) REPO="$pick"; return ;;
+      ''|*[!0-9]*) warn "Enter a number from the list or owner/name." ;;
+      *)
+        i=0
+        while IFS=$'\t' read -r line _; do
+          i=$((i+1))
+          if [ "$i" -eq "$pick" ]; then REPO="$line"; return; fi
+        done <<< "$repos"
+        warn "No entry $pick." ;;
+    esac
+  done
+}
 
 VAULT_PATH=""
 case "$VAULT_MODE" in
   clone)
     REPO="${HUBLE_VAULT_REPO:-}"
-    if [ -z "$REPO" ]; then ask "  Vault repo (owner/name)" REPO; fi
+    if [ -z "$REPO" ]; then
+      if $INTERACTIVE; then choose_vault_repo; else fail "Non-interactive run: set HUBLE_VAULT_REPO=owner/name for HUBLE_VAULT_MODE=clone."; fi
+    fi
+    case "$REPO" in */*) ;; *) REPO="$VAULT_ORG/$REPO" ;; esac
     VAULT_PATH="$VAULTS_DIR/$(basename "$REPO")"
     if [ -d "$VAULT_PATH/.git" ]; then
       git -C "$VAULT_PATH" pull --ff-only || true
@@ -501,8 +745,9 @@ case "$VAULT_MODE" in
     ;;
   new)
     CLIENT="${HUBLE_CLIENT_NAME:-}"
-    if [ -z "$CLIENT" ]; then ask "  Client name" CLIENT; fi
+    if [ -z "$CLIENT" ]; then ask "  Client name" CLIENT "" HUBLE_CLIENT_NAME; fi
     [ -n "$CLIENT" ] || fail "Client name required."
+    case "$CLIENT" in */*|.*) fail "Client name '$CLIENT' cannot contain '/' or start with '.'." ;; esac
     VAULT_PATH="$VAULTS_DIR/$CLIENT"
     "$HUBLE" vault init --client "$CLIENT" --vault "$VAULT_PATH" --role "$ROLE"
     ;;
@@ -516,9 +761,9 @@ case "$VAULT_MODE" in
     if [ "$REINIT_VAULT" = "no" ]; then
       REINIT_VAULT=""
     elif [ -z "$REINIT_VAULT" ]; then
-      LAST_VAULT="$(json_read "$HUBLE_HOME/machine.json" lastVault)"
+      LAST_VAULT="$(json_read "$INSTALLER_STATE" lastVault)"
       if [ -n "$LAST_VAULT" ] && [ ! -d "$LAST_VAULT" ]; then LAST_VAULT=""; fi
-      if ( : < /dev/tty ) 2>/dev/null; then
+      if $INTERACTIVE; then
         if [ -n "$LAST_VAULT" ]; then
           ask "  Update the vault at $LAST_VAULT too (plugin/skills/commands)? (Y/n)" UPDATE_VAULT "y"
           case "$UPDATE_VAULT" in [Yy]*) REINIT_VAULT="$LAST_VAULT" ;; esac
@@ -540,7 +785,8 @@ case "$VAULT_MODE" in
       fi
       note "Updating the vault's plugin/skills/commands (role: $REINIT_ROLE)..."
       "$HUBLE" cx init --vault "$REINIT_VAULT" --role "$REINIT_ROLE"
-      json_write "$HUBLE_HOME/machine.json" lastVault "$REINIT_VAULT"
+      json_write "$INSTALLER_STATE" lastVault "$REINIT_VAULT"
+      $JSON_OUT && emit vault path "$REINIT_VAULT"
       ok "Vault at $REINIT_VAULT updated in lockstep with the platform"
     fi
     ;;
@@ -550,10 +796,13 @@ esac
 if [ -n "$VAULT_PATH" ]; then
   step "Installing the Atlas plugin (role: $ROLE)"
   "$HUBLE" cx init --vault "$VAULT_PATH" --role "$ROLE"
-  # Remember this vault + role so a future skip-mode re-run can offer the
-  # lockstep vault update without re-asking for everything.
-  json_write "$HUBLE_HOME/machine.json" lastVault "$VAULT_PATH"
+  # Remember this vault, the role and the vaults folder so the next run (or a
+  # GUI client) can offer them as defaults without re-asking for everything.
+  json_write "$INSTALLER_STATE" lastVault "$VAULT_PATH"
+  json_write "$INSTALLER_STATE" role "$ROLE"
+  json_write "$INSTALLER_STATE" vaultsDir "$VAULTS_DIR"
   json_write "$VAULT_PATH/.huble/machine.json" role "$ROLE"
+  $JSON_OUT && emit vault path "$VAULT_PATH"
   ok "Atlas plugin installed and enabled, role set to $ROLE"
 fi
 
@@ -574,7 +823,7 @@ if command -v pdftoppm >/dev/null 2>&1; then
   ok "poppler (pdftoppm)"
 else
   if ! command -v brew >/dev/null 2>&1; then
-    if $IS_ADMIN; then
+    if $IS_ADMIN && $INTERACTIVE; then
       note "poppler installs via Homebrew, which is not on this Mac yet."
       note "Why: agents render PDF pages as images with it - without it they can"
       note "only read a PDF's extracted text (diagram-heavy PDFs become unreadable)."
@@ -615,9 +864,10 @@ else
         *) note "Skipping Homebrew." ;;
       esac
     else
-      # Homebrew's installer needs an admin account - never prompt for a
-      # password this user does not have (same rule as the app installs).
-      note "poppler installs via Homebrew, which needs an admin account."
+      # Homebrew's installer needs an admin account AND a terminal for its
+      # password prompt - never prompt for a password this user does not
+      # have, and never block a GUI client on one (same rule as the app installs).
+      note "poppler installs via Homebrew, which needs an admin account in a terminal."
     fi
   fi
   if command -v brew >/dev/null 2>&1; then
@@ -725,12 +975,36 @@ if [ -n "$VAULT_PATH" ]; then
   fi
 fi
 if [ -n "${PLATFORM_UPDATE_FAILED:-}" ]; then
-  printf '\033[31m  X PLATFORM NOT UPDATED - this machine is still on the OLD platform version.\033[0m\n' >&2
-  printf '\033[31m    Fix GitHub access to %s (gh auth status) or network, then re-run this installer.\033[0m\n' "$PLATFORM_REPO" >&2
+  err "PLATFORM NOT UPDATED - this machine is still on the OLD platform version."
+  err "Fix GitHub access to $PLATFORM_REPO (gh auth status) or network, then re-run this installer."
+fi
+# Save this installer locally so GUI clients (the Huble app, the Atlas
+# plugin) run the exact same script without a terminal or a curl. When we
+# were run from a file (a client calling ~/.huble/install.sh, or a checkout)
+# copy that file; when piped through curl there is no file, so download.
+save_self() {
+  local target="$HUBLE_HOME/install.sh"
+  if [ -f "$0" ] && grep -q '^INSTALLER_VERSION=' "$0" 2>/dev/null; then
+    if [ "$(cd "$(dirname "$0")" && pwd -P)/$(basename "$0")" != "$target" ]; then
+      cp -f "$0" "$target" && chmod +x "$target"
+    fi
+    return 0
+  fi
+  refresh_self
+}
+if save_self; then
+  json_write "$INSTALLER_STATE" installerVersion "$INSTALLER_VERSION"
+  note "Installer saved to $HUBLE_HOME/install.sh (GUI clients run this copy)"
+else
+  warn "Could not save a local copy of the installer to $HUBLE_HOME/install.sh - GUI clients will bootstrap via curl instead."
 fi
 note "Platform: $PLATFORM_DIR  (re-run this installer any time to update everything)"
-note "The huble command works in NEW terminals (this one: run  source ~/.zshrc  first)."
+$INTERACTIVE && note "The huble command works in NEW terminals (this one: run  source ~/.zshrc  first)."
 if ! command -v claude >/dev/null 2>&1 || ! [ -e "$HOME/.claude" ]; then
   note "Remember to authenticate the agent CLI once:  claude login"
 fi
 bold ""
+if $JSON_OUT; then
+  if [ -n "${PLATFORM_UPDATE_FAILED:-}" ]; then PU=false; else PU=true; fi
+  emit done vault "${VAULT_PATH:-${REINIT_VAULT:-}}" platformUpdated "$PU"
+fi

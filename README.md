@@ -25,7 +25,9 @@ curl -fsSL https://raw.githubusercontent.com/HubleDigital/huble-install/main/ins
 
 Run it **from the folder where you want your client vaults** — secondary
 drive, `~/Work/Clients`, anywhere. Vaults are created there; all tooling
-(platform, node, CLIs) stays hidden in `~/.huble`.
+(platform, node, CLIs) stays hidden in `~/.huble`. Run from your home folder
+and it reuses the vaults folder from last time (remembered in
+`~/.huble/installer.json`, together with your role).
 
 The installer puts the `huble` command on your PATH (it appends one block to
 `~/.zprofile`), so `huble ...` works in any **new** terminal after installing.
@@ -40,6 +42,31 @@ merged, not overwritten).
 You'll be asked to sign in to GitHub in the browser the first time (the
 platform and client vaults are private repositories). After installing, run
 `claude login` once to authenticate the agent CLI with your Claude plan.
+
+When cloning an existing client vault, the installer lists the vaults your
+GitHub account can see (org repos tagged with the `guerilla-client-vault`
+topic) — pick a number, or type `owner/name`.
+
+## The Huble app (no terminal)
+
+`app/` holds a small macOS app for team members who never open a terminal:
+a list of the projects on this Mac, **New project**, **Open existing
+project** (picks from the tagged client vaults on GitHub), **Update**, and
+**Open in Obsidian**. It has no logic of its own — every action runs the same
+`install.sh` headlessly and shows its progress, including the GitHub
+sign-in code when a first sign-in is needed. Build and signing notes are in
+`app/README.md`; until it is signed with a Developer ID it only runs on the
+Mac that built it.
+
+## For GUI clients (the app, the Atlas plugin)
+
+Every successful run saves a copy of the installer to `~/.huble/install.sh`.
+Clients run that copy with `HUBLE_OUTPUT=json` and `HUBLE_NONINTERACTIVE=1`
+and drive it through `HUBLE_*` environment variables; the installer answers
+with one JSON event per line and exits 0/1. The full contract — variables,
+events, the `~/.huble/installer.json` state file, non-interactive rules — is
+[docs/installer-contract.md](docs/installer-contract.md). Flags:
+`--contract`, `--version`, `--refresh`, `--help`.
 
 ## Publishing a review site (strategy roles)
 
