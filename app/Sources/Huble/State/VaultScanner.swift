@@ -26,8 +26,23 @@ enum VaultScanner {
                 add((dir as NSString).appendingPathComponent(e))
             }
         }
+        // Obsidian's own vault list is the durable source: a vault that lives
+        // outside vaultsDir stays listed here for as long as Obsidian knows it,
+        // instead of vanishing the moment lastVault moves on.
+        for p in obsidianVaultPaths() { add(p) }
         if let last = state.lastVault { add(last) }
         return vaults
+    }
+
+    static func obsidianVaultPaths() -> [String] {
+        let cfg = Shell.home + "/Library/Application Support/obsidian/obsidian.json"
+        guard let data = FileManager.default.contents(atPath: cfg),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let vaults = obj["vaults"] as? [String: Any]
+        else { return [] }
+        return vaults.values
+            .compactMap { ($0 as? [String: Any])?["path"] as? String }
+            .sorted()
     }
 
     static func isVault(_ path: String) -> Bool {

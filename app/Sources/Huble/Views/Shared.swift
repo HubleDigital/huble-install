@@ -16,14 +16,14 @@ enum Obsidian {
 }
 
 enum FolderPicker {
-    static func choose(startingAt path: String) -> String? {
+    static func choose(startingAt path: String, message: String = "Folder that will contain the client vault") -> String? {
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.canCreateDirectories = true
         panel.allowsMultipleSelection = false
         panel.prompt = "Choose"
-        panel.message = "Folder that will contain the client vault"
+        panel.message = message
         panel.directoryURL = URL(fileURLWithPath: path)
         return panel.runModal() == .OK ? panel.url?.path : nil
     }

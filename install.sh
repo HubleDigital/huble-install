@@ -887,7 +887,10 @@ case "$VAULT_MODE" in
     if [ -n "$REINIT_VAULT" ]; then
       [ -d "$REINIT_VAULT" ] || fail "No vault folder at $REINIT_VAULT."
       # The vault remembers its role; only ask (and persist) when it doesn't.
+      # The vault's recorded role wins; HUBLE_ROLE only fills the gap for a
+      # vault that never recorded one (a client opening a folder from disk).
       REINIT_ROLE="$(json_read "$REINIT_VAULT/.huble/machine.json" role)"
+      [ -z "$REINIT_ROLE" ] && [ -n "$ROLE" ] && REINIT_ROLE="$ROLE"
       if [ -z "$REINIT_ROLE" ]; then
         ask_role REINIT_ROLE
         json_write "$REINIT_VAULT/.huble/machine.json" role "$REINIT_ROLE"
@@ -914,6 +917,12 @@ if [ -n "$VAULT_PATH" ]; then
   $JSON_OUT && emit vault path "$VAULT_PATH"
   ok "Atlas plugin installed and enabled, role set to $ROLE"
 fi
+
+# A re-initialised vault is opened in Obsidian at the end exactly like a new
+# or cloned one (unless HUBLE_NO_OPEN) - that is how a client "opens a
+# project from this Mac". Set only AFTER the plugin step above so cx init
+# does not run twice.
+[ -z "$VAULT_PATH" ] && VAULT_PATH="${REINIT_VAULT:-}"
 
 # ---------------------------------------------------------------- Poppler (PDF page rendering)
 # Agents view PDF pages as images through pdftoppm when reading a PDF (brand

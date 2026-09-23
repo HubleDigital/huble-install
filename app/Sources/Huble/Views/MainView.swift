@@ -10,10 +10,11 @@ struct MainView: View {
                 ContentUnavailableView {
                     Label("No projects on this Mac", systemImage: "folder")
                 } description: {
-                    Text("Create a new project or open an existing client vault from GitHub.")
+                    Text("Create a new project, clone a client vault from GitHub, or open a vault folder already on this Mac.")
                 } actions: {
                     Button("New project") { model.showNewProject = true }
-                    Button("Open existing project") { model.showOpenExisting = true }
+                    Button("Clone project") { model.showCloneProject = true }
+                    Button("Open project") { model.showOpenProject = true }
                 }
             } else {
                 List(model.vaults) { vault in
@@ -27,14 +28,18 @@ struct MainView: View {
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
                 Button { model.showNewProject = true } label: { Label("New project", systemImage: "plus") }
-                Button { model.showOpenExisting = true } label: { Label("Open existing project", systemImage: "icloud.and.arrow.down") }
+                Button { model.showCloneProject = true } label: { Label("Clone project", systemImage: "icloud.and.arrow.down") }
+                Button { model.showOpenProject = true } label: { Label("Open project", systemImage: "folder") }
             }
         }
         .sheet(isPresented: $model.showNewProject) {
             NewProjectSheet { model.run($0) }
         }
-        .sheet(isPresented: $model.showOpenExisting) {
-            OpenExistingSheet { model.run($0) }
+        .sheet(isPresented: $model.showCloneProject) {
+            CloneProjectSheet { model.run($0) }
+        }
+        .sheet(isPresented: $model.showOpenProject) {
+            OpenProjectSheet { model.run($0) }
         }
     }
 
@@ -81,7 +86,7 @@ private struct VaultRow: View {
             Button("Move to Trash", role: .destructive) { model.run(.removeVault(path: vault.path)) }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("The folder moves to the Trash. The GitHub repository is not touched — you can open the project again any time from “Open existing project”.")
+            Text("The folder moves to the Trash. The GitHub repository is not touched — you can clone the project again any time with “Clone project”.")
         }
     }
 }

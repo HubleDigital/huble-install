@@ -11,7 +11,8 @@ final class AppModel {
     var githubLogin: String?
     var activeRun: InstallerRun?
     var showNewProject = false
-    var showOpenExisting = false
+    var showCloneProject = false
+    var showOpenProject = false
     var bootstrapError: String?
     var bootstrapping = false
 

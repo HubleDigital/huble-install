@@ -50,9 +50,10 @@ topic) — pick a number, or type `owner/name`.
 ## The Huble app (no terminal)
 
 `app/` holds a small macOS app for team members who never open a terminal:
-a list of the projects on this Mac, **New project**, **Open existing
-project** (picks from the tagged client vaults on GitHub), **Update**,
-**Open in Obsidian** and **Remove** (moves the folder to the Trash and
+a list of the projects on this Mac (your vaults folder plus every Huble
+vault Obsidian knows), **New project**, **Clone project** (picks from the
+tagged client vaults on GitHub), **Open project** (a vault folder already on
+this Mac), **Update**, **Open in Obsidian** and **Remove** (moves the folder to the Trash and
 forgets it in Obsidian — the GitHub repository is never touched, and a vault
 with unsynced work asks twice). It has no logic of its own — every action runs the same
 `install.sh` headlessly and shows its progress, including the GitHub

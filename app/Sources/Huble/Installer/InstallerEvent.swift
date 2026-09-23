@@ -53,8 +53,18 @@ struct InstallerAction {
         ])
     }
 
+    /// A vault folder already on this Mac: re-init its plugin/skills for this
+    /// machine and open it in Obsidian (HUBLE_NO_OPEN unset). `role` is only
+    /// used when the vault never recorded one.
+    static func openLocal(path: String, role: String?) -> InstallerAction {
+        var env = ["HUBLE_VAULT_MODE": "skip", "HUBLE_VAULT_REINIT": path]
+        if let role { env["HUBLE_ROLE"] = role }
+        let name = (path as NSString).lastPathComponent
+        return InstallerAction(title: "Opening “\(name)”", env: env)
+    }
+
     static func cloneProject(repo: String, role: String, vaultsDir: String) -> InstallerAction {
-        InstallerAction(title: "Opening project \(repo)", env: [
+        InstallerAction(title: "Cloning project \(repo)", env: [
             "HUBLE_VAULT_MODE": "clone", "HUBLE_VAULT_REPO": repo, "HUBLE_ROLE": role, "HUBLE_VAULTS_DIR": vaultsDir,
         ])
     }

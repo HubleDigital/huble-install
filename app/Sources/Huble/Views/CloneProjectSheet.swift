@@ -1,6 +1,8 @@
 import SwiftUI
 
-struct OpenExistingSheet: View {
+/// Clone a client vault from GitHub: the org repos tagged as vaults, or a
+/// typed owner/name.
+struct CloneProjectSheet: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
     let onRun: (InstallerAction) -> Void
@@ -30,7 +32,7 @@ struct OpenExistingSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("Open existing project").font(.title2.weight(.semibold))
+            Text("Clone project from GitHub").font(.title2.weight(.semibold))
 
             TextField("Search client vaults", text: $search)
                 .textFieldStyle(.roundedBorder)
@@ -69,14 +71,14 @@ struct OpenExistingSheet: View {
                 Picker("Your role", selection: $role) {
                     ForEach(hubleRoles, id: \.self) { Text($0.uppercased()).tag($0) }
                 }
-                LabeledContent("Folder") { FolderField(folder: $folder) }
+                LabeledContent("Clone into") { FolderField(folder: $folder) }
             }
             .formStyle(.grouped)
 
             HStack {
                 Spacer()
                 Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
-                Button("Open") {
+                Button("Clone") {
                     if let repo {
                         onRun(.cloneProject(repo: repo, role: role, vaultsDir: folder))
                         dismiss()

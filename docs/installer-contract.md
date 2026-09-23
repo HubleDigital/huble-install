@@ -41,7 +41,7 @@ bootstrap once (with `HUBLE_VAULT_MODE=skip`) to create it.
 | `HUBLE_VAULTS_DIR` | absolute path | folder that will contain the vault folder |
 | `HUBLE_CLIENT_NAME` | string | with `new`: vault at `$HUBLE_VAULTS_DIR/<name>` |
 | `HUBLE_VAULT_REPO` | `owner/name` | with `clone`: vault at `$HUBLE_VAULTS_DIR/<name>` |
-| `HUBLE_VAULT_REINIT` | absolute vault path / `no` | with `skip`: re-init that vault's plugin/skills/commands (terminal use; the plugin has its own update path) |
+| `HUBLE_VAULT_REINIT` | absolute vault path / `no` | with `skip`: re-init that vault's plugin/skills/commands for this machine. Without `HUBLE_NO_OPEN` the vault is then registered and opened in Obsidian — this is how a client "opens a project already on this Mac". The vault's recorded role wins; `HUBLE_ROLE` only fills the gap for a vault that never recorded one. (The plugin has its own update path.) |
 | `HUBLE_VAULT_ORG` | org login, default `HubleDigital` | where client vault repos live |
 | `HUBLE_VAULT_TOPIC` | default `guerilla-client-vault` | GitHub topic that marks a repo as a client vault |
 | `HUBLE_INSTALL_URL` | URL, default raw `main` | where `--refresh` / self-copy download from (use a branch URL for testing) |
