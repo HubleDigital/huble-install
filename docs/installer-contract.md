@@ -47,6 +47,11 @@ bootstrap once (with `HUBLE_VAULT_MODE=skip`) to create it.
 | `HUBLE_INSTALL_URL` | URL, default raw `main` | where `--refresh` / self-copy download from (use a branch URL for testing) |
 | `HUBLE_HOME` | default `~/.huble` | hidden tooling root |
 | `HUBLE_PLATFORM_REPO` | default `HubleDigital/huble-platform` | |
+| `HUBLE_PLATFORM_UPDATE` | `0` | never `pull`, `reset` or re-point the platform checkout; require that it exists (else `fail`). A client running **inside Obsidian** always passes this — the plugin owns platform updates. `done.platformUpdate` is then `"skipped"`. Feature `platform-update-skip`. |
+
+In every mode the installer never discards local changes in `~/.huble/platform`:
+a fast-forward that fails on a dirty checkout warns and reports
+`platformUpdate: "failed"` instead of resetting.
 
 Values are passed only through the environment, never interpolated into a
 shell string.
@@ -88,7 +93,7 @@ show as a raw log. Clients must rely on events, not on stderr, for state.
 
 | event | fields | meaning |
 |---|---|---|
-| `contract` | `contract` ("v1"), `version` | always the first line. Clients refuse to continue on an unknown `contract`. |
+| `contract` | `contract` ("v1"), `version`, `features` (array of strings) | always the first line. Clients refuse to continue on an unknown `contract`, and check `features` for the additive capabilities they rely on. Defined: `platform-update-skip`, `remove`, `reinit-open`. Text mode prints them on a second line `huble-install features: …`. |
 | `step` | `message` | a new top-level step started (Checking Node.js, Installing the Huble platform, …) |
 | `ok` | `message` | step or sub-step succeeded |
 | `note` | `message` | informational |
@@ -97,12 +102,12 @@ show as a raw log. Clients must rely on events, not on stderr, for state.
 | `gh_auth` | `code`, `url` | show `code` to the user and open `url`. The installer keeps polling until sign-in completes. |
 | `vault` | `path` | the vault this run created, cloned or re-initialised |
 | `fail` | `message`, optional `reason` | fatal; exit code 1 follows. `reason` is a machine-readable tag a client may branch on. Defined: `unsynced` (remove refused because work is not on GitHub; retry with `HUBLE_FORCE=1` after a second confirmation). |
-| `done` | `vault` (path or ""), `platformUpdated` (bool) | success; exit code 0 follows |
+| `done` | `vault` (path or ""), `platformUpdated` (bool), `platformUpdate` (`"updated"` / `"skipped"` / `"failed"`) | success; exit code 0 follows |
 
 Example:
 
 ```
-{"event":"contract","contract":"v1","version":"2.0.0"}
+{"event":"contract","contract":"v1","version":"2.1.0","features":["platform-update-skip","remove","reinit-open"]}
 {"event":"step","message":"Checking developer tools (git)"}
 {"event":"ok","message":"Command Line Tools present"}
 {"event":"gh_auth","code":"AB12-CD34","url":"https://github.com/login/device"}
@@ -141,6 +146,15 @@ gh repo list HubleDigital --topic guerilla-client-vault --json name,description,
 
 Clients prefer `huble vault list --json` (platform CLI, same query) when the
 verb exists and fall back to the `gh` query above.
+
+### "Already on this Mac"
+
+A remote vault counts as present locally when a local vault's git `origin`
+resolves to the same `owner/name` (case-insensitive, `.git` suffix and
+`https://` / `git@github.com:` forms ignored). Folder names are not a signal
+(a clone lands in `<vaultsDir>/<repo-name>`, hand-made vaults are named after
+the client). Both clients (app, plugin) use this rule; the Huble app then
+offers to open the local copy instead of cloning again.
 
 ## Opening a vault in Obsidian
 

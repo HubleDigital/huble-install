@@ -30,6 +30,13 @@ struct CloneProjectSheet: View {
         return m.contains("/") ? m : "\(RemoteVaults.org)/\(m)"
     }
 
+    /// The local vault whose git origin is this repo (contract rule: origin
+    /// owner/name, never the folder name).
+    private func localCopy(of repo: String) -> LocalVault? {
+        model.vaults.first { $0.origin == repo.lowercased() }
+    }
+    private var existingLocal: LocalVault? { repo.flatMap(localCopy) }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             Text("Clone project from GitHub").font(.title2.weight(.semibold))
@@ -53,10 +60,20 @@ struct CloneProjectSheet: View {
                         .frame(maxWidth: .infinity, alignment: .center)
                 } else {
                     List(filtered, selection: $selected) { v in
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(v.name).font(.body.weight(.medium))
-                            if let d = v.description {
-                                Text(d).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                        HStack {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(v.name).font(.body.weight(.medium))
+                                if let d = v.description {
+                                    Text(d).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                                }
+                            }
+                            Spacer()
+                            if localCopy(of: v.nameWithOwner) != nil {
+                                Text("On this Mac")
+                                    .font(.caption2.weight(.semibold))
+                                    .padding(.horizontal, 6).padding(.vertical, 2)
+                                    .background(Color.green.opacity(0.18))
+                                    .clipShape(Capsule())
                             }
                         }
                         .tag(v)
@@ -75,11 +92,21 @@ struct CloneProjectSheet: View {
             }
             .formStyle(.grouped)
 
+            if let local = existingLocal {
+                Label("Already on this Mac at \(local.path) — “Open” opens that copy instead of cloning again.", systemImage: "info.circle")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
             HStack {
                 Spacer()
                 Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
-                Button("Clone") {
-                    if let repo {
+                Button(existingLocal == nil ? "Clone" : "Open") {
+                    if let local = existingLocal {
+                        onRun(.openLocal(path: local.path, role: local.role == nil ? role : nil))
+                        dismiss()
+                    } else if let repo {
                         onRun(.cloneProject(repo: repo, role: role, vaultsDir: folder))
                         dismiss()
                     }

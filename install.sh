@@ -25,6 +25,8 @@
 #   HUBLE_VAULTS_DIR=/path        where vaults go (default: launch folder, then
 #                                 the folder remembered in installer.json)
 #   HUBLE_PLATFORM_REPO=HubleDigital/huble-platform
+#   HUBLE_PLATFORM_UPDATE=0       never pull/reset the platform checkout (a
+#                                 client inside Obsidian owns platform updates)
 #   HUBLE_ROLE=cx|copy|seo|design|dev|all    skip the role prompt
 #                 (all = orchestrator/test machines, not shown in the menu)
 #   HUBLE_VAULT_MODE=new|clone|skip|remove
@@ -39,8 +41,14 @@
 #   HUBLE_NO_OPEN=1               don't open Obsidian at the end
 set -euo pipefail
 
-INSTALLER_VERSION="2.0.0"
+INSTALLER_VERSION="2.1.0"
 CONTRACT_VERSION="v1"
+# Additive capabilities within contract v1. A client that needs one checks
+# for it in the contract event / line instead of guessing from the version.
+#   platform-update-skip  HUBLE_PLATFORM_UPDATE=0 honoured
+#   remove                HUBLE_VAULT_MODE=remove (+ HUBLE_FORCE, fail.reason)
+#   reinit-open           a re-initialised vault is opened in Obsidian unless HUBLE_NO_OPEN
+CONTRACT_FEATURES="platform-update-skip remove reinit-open"
 INSTALL_URL="${HUBLE_INSTALL_URL:-https://raw.githubusercontent.com/HubleDigital/huble-install/main/install.sh}"
 
 # Tooling lives hidden in ~/.huble (platform checkout, user-level node/npm/gh).
@@ -154,11 +162,19 @@ refresh_self() { # download the current installer into $HUBLE_HOME/install.sh
   rm -f "$tmp"
   return 1
 }
+print_contract() {
+  if $JSON_OUT; then
+    local list="" f
+    for f in $CONTRACT_FEATURES; do list="$list${list:+,}\"$f\""; done
+    printf '{"event":"contract","contract":"%s","version":"%s","features":[%s]}\n' "$CONTRACT_VERSION" "$INSTALLER_VERSION" "$list" >&3
+  else
+    printf 'huble-install contract %s\n' "$CONTRACT_VERSION" >&3
+    printf 'huble-install features: %s\n' "$CONTRACT_FEATURES" >&3
+  fi
+}
 for arg in "$@"; do
   case "$arg" in
-    --contract)
-      if $JSON_OUT; then emit contract contract "$CONTRACT_VERSION" version "$INSTALLER_VERSION"; else printf 'huble-install contract %s\n' "$CONTRACT_VERSION" >&3; fi
-      exit 0 ;;
+    --contract) print_contract; exit 0 ;;
     --version) printf '%s\n' "$INSTALLER_VERSION" >&3; exit 0 ;;
     --refresh)
       refresh_self || fail "Could not download the installer from $INSTALL_URL."
@@ -171,7 +187,7 @@ done
 
 # The contract line is ALWAYS the first thing on stdout - a client checks it
 # before trusting anything else.
-if $JSON_OUT; then emit contract contract "$CONTRACT_VERSION" version "$INSTALLER_VERSION"; else printf 'huble-install contract %s\n' "$CONTRACT_VERSION" >&3; fi
+print_contract
 
 # One-time migration from the old visible ~/Huble layout: move the tooling
 # dirs into ~/.huble, repoint vault pipelineRoot configs and the .zprofile
@@ -529,7 +545,18 @@ fi
 
 # ---------------------------------------------------------------- Platform repo
 step "Installing the Huble platform"
-if [ -d "$PLATFORM_DIR/.git" ]; then
+# HUBLE_PLATFORM_UPDATE=0: use the platform already on this machine, touch
+# nothing in its checkout. A client running INSIDE Obsidian passes this: the
+# plugin has its own gated self-update (never auto-apply, refuse mid-run,
+# hard stop on local changes) and must not have the platform swapped under
+# it by a "new project" click.
+PLATFORM_UPDATE_STATE="updated"
+if [ "${HUBLE_PLATFORM_UPDATE:-1}" = "0" ]; then
+  [ -d "$PLATFORM_DIR/.git" ] \
+    || fail "The Huble platform is not installed on this Mac yet - run the installer once (Set up this Mac, or the curl line) before this action."
+  PLATFORM_UPDATE_STATE="skipped"
+  note "Platform update skipped (HUBLE_PLATFORM_UPDATE=0) - using the platform already on this machine."
+elif [ -d "$PLATFORM_DIR/.git" ]; then
   note "Updating existing platform checkout..."
   # Re-point the remote UNCONDITIONALLY (same rule as the npm-prefix rewrite):
   # checkouts from before the org migration still aim at the old archived
@@ -537,15 +564,23 @@ if [ -d "$PLATFORM_DIR/.git" ]; then
   # the whole machine to an ancient platform version.
   git -C "$PLATFORM_DIR" remote set-url origin "https://github.com/$PLATFORM_REPO.git"
   if ! git -C "$PLATFORM_DIR" pull --ff-only; then
-    # Shallow/grafted clones can refuse to fast-forward across history gaps.
-    # The platform checkout is tool-managed (never hand-edited), so resetting
-    # to the remote tip is safe and beats staying stale forever.
-    note "Fast-forward failed - resetting the tool-managed checkout to the latest platform."
-    git -C "$PLATFORM_DIR" fetch --depth 1 origin main \
-      && git -C "$PLATFORM_DIR" reset --hard FETCH_HEAD \
-      || PLATFORM_UPDATE_FAILED=1
+    if [ -n "$(git -C "$PLATFORM_DIR" status --porcelain 2>/dev/null)" ]; then
+      # Someone is hand-editing the platform (a local hotfix). A reset would
+      # silently discard their work - never do that; leave it and be loud.
+      warn "The platform checkout has local changes that block the update - commit, stash or discard them in $PLATFORM_DIR, then re-run."
+      PLATFORM_UPDATE_FAILED=1
+    else
+      # Shallow/grafted clones can refuse to fast-forward across history gaps.
+      # A CLEAN tool-managed checkout is safe to reset to the remote tip, and
+      # that beats staying stale forever.
+      note "Fast-forward failed - resetting the tool-managed checkout to the latest platform."
+      git -C "$PLATFORM_DIR" fetch --depth 1 origin main \
+        && git -C "$PLATFORM_DIR" reset --hard FETCH_HEAD \
+        || PLATFORM_UPDATE_FAILED=1
+    fi
   fi
   if [ -n "${PLATFORM_UPDATE_FAILED:-}" ]; then
+    PLATFORM_UPDATE_STATE="failed"
     # A stale platform silently pins every vault this machine touches to an
     # old plugin/pipeline (field incident: 0.1.0 plugin installed by cx init
     # months after fixes shipped). Be LOUD here and again in the summary.
@@ -1108,6 +1143,6 @@ if ! command -v claude >/dev/null 2>&1 || ! [ -e "$HOME/.claude" ]; then
 fi
 bold ""
 if $JSON_OUT; then
-  if [ -n "${PLATFORM_UPDATE_FAILED:-}" ]; then PU=false; else PU=true; fi
-  emit done vault "${VAULT_PATH:-${REINIT_VAULT:-}}" platformUpdated "$PU"
+  if [ "$PLATFORM_UPDATE_STATE" = "updated" ]; then PU=true; else PU=false; fi
+  emit done vault "${VAULT_PATH:-${REINIT_VAULT:-}}" platformUpdated "$PU" platformUpdate "$PLATFORM_UPDATE_STATE"
 fi

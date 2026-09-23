@@ -5,6 +5,9 @@ struct LocalVault: Identifiable, Hashable {
     let name: String
     let path: String
     let role: String?
+    /// `owner/name` of the git origin, lowercased — the contract's rule for
+    /// matching a local vault to a GitHub repo. nil without a git origin.
+    let origin: String?
 }
 
 enum VaultScanner {
@@ -17,7 +20,7 @@ enum VaultScanner {
             let p = (path as NSString).standardizingPath
             guard !seen.contains(p), isVault(p) else { return }
             seen.insert(p)
-            vaults.append(LocalVault(name: displayName(p), path: p, role: role(of: p)))
+            vaults.append(LocalVault(name: displayName(p), path: p, role: role(of: p), origin: origin(of: p)))
         }
 
         if let dir = state.vaultsDir,
@@ -50,6 +53,33 @@ enum VaultScanner {
         let fm = FileManager.default
         guard fm.fileExists(atPath: path, isDirectory: &isDir), isDir.boolValue else { return false }
         return fm.fileExists(atPath: path + "/.huble") || fm.fileExists(atPath: path + "/project-config.json")
+    }
+
+    /// Parses `.git/config` for the origin URL and reduces it to `owner/name`
+    /// (lowercased); handles `https://github.com/o/n(.git)` and
+    /// `git@github.com:o/n(.git)`. No git subprocess — this runs on every refresh.
+    static func origin(of path: String) -> String? {
+        guard let data = FileManager.default.contents(atPath: path + "/.git/config"),
+              let text = String(data: data, encoding: .utf8) else { return nil }
+        var inOrigin = false
+        for raw in text.split(separator: "\n") {
+            let line = raw.trimmingCharacters(in: .whitespaces)
+            if line.hasPrefix("[") { inOrigin = line.replacingOccurrences(of: " ", with: "") == "[remote\"origin\"]"; continue }
+            guard inOrigin, line.hasPrefix("url") else { continue }
+            guard let eq = line.firstIndex(of: "=") else { continue }
+            return normalizeRepo(String(line[line.index(after: eq)...]).trimmingCharacters(in: .whitespaces))
+        }
+        return nil
+    }
+
+    static func normalizeRepo(_ url: String) -> String? {
+        var s = url
+        if s.hasSuffix(".git") { s.removeLast(4) }
+        if let r = s.range(of: "github.com/") { s = String(s[r.upperBound...]) }
+        else if let r = s.range(of: "github.com:") { s = String(s[r.upperBound...]) }
+        let parts = s.split(separator: "/").filter { !$0.isEmpty }
+        guard parts.count >= 2 else { return nil }
+        return "\(parts[parts.count - 2])/\(parts[parts.count - 1])".lowercased()
     }
 
     static func role(of path: String) -> String? {
