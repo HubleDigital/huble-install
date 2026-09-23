@@ -926,10 +926,11 @@ case "$VAULT_MODE" in
       # vault that never recorded one (a client opening a folder from disk).
       REINIT_ROLE="$(json_read "$REINIT_VAULT/.huble/machine.json" role)"
       [ -z "$REINIT_ROLE" ] && [ -n "$ROLE" ] && REINIT_ROLE="$ROLE"
-      if [ -z "$REINIT_ROLE" ]; then
-        ask_role REINIT_ROLE
-        json_write "$REINIT_VAULT/.huble/machine.json" role "$REINIT_ROLE"
-      fi
+      # No role recorded: ask (or HUBLE_ROLE) and hand it to cx init, which
+      # records it in the vault - the installer never writes that file
+      # itself (some vaults track it in git, so a stray write from one
+      # machine reaches every colleague).
+      if [ -z "$REINIT_ROLE" ]; then ask_role REINIT_ROLE; fi
       note "Updating the vault's plugin/skills/commands (role: $REINIT_ROLE)..."
       "$HUBLE" cx init --vault "$REINIT_VAULT" --role "$REINIT_ROLE"
       json_write "$INSTALLER_STATE" lastVault "$REINIT_VAULT"
@@ -945,10 +946,11 @@ if [ -n "$VAULT_PATH" ]; then
   "$HUBLE" cx init --vault "$VAULT_PATH" --role "$ROLE"
   # Remember this vault, the role and the vaults folder so the next run (or a
   # GUI client) can offer them as defaults without re-asking for everything.
+  # The vault's own .huble/machine.json role is recorded by cx init above,
+  # never by the installer (see the re-init path for why).
   json_write "$INSTALLER_STATE" lastVault "$VAULT_PATH"
   json_write "$INSTALLER_STATE" role "$ROLE"
   json_write "$INSTALLER_STATE" vaultsDir "$VAULTS_DIR"
-  json_write "$VAULT_PATH/.huble/machine.json" role "$ROLE"
   $JSON_OUT && emit vault path "$VAULT_PATH"
   ok "Atlas plugin installed and enabled, role set to $ROLE"
 fi
