@@ -4,8 +4,12 @@ import SwiftUI
 struct ProgressSheet: View {
     let run: InstallerRun
     let onClose: () -> Void
+    /// Offered when a remove failed with `reason: unsynced`: the user has read
+    /// the warning and chooses to lose the unsynced work.
+    var onRemoveAnyway: (() -> Void)? = nil
 
     @State private var showLog = false
+    @State private var confirmForce = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -64,6 +68,15 @@ struct ProgressSheet: View {
                 if run.isRunning {
                     Button("Cancel") { run.cancel() }.keyboardShortcut(.cancelAction)
                 } else {
+                    if run.failReason == "unsynced", let onRemoveAnyway {
+                        Button("Remove anyway…", role: .destructive) { confirmForce = true }
+                            .confirmationDialog("Remove it and lose the unsynced work?", isPresented: $confirmForce, titleVisibility: .visible) {
+                                Button("Move to Trash anyway", role: .destructive) { onRemoveAnyway() }
+                                Button("Cancel", role: .cancel) {}
+                            } message: {
+                                Text("Changes that were never synced to GitHub exist only in this folder. They go to the Trash with it.")
+                            }
+                    }
                     Button("Close") { onClose() }.keyboardShortcut(.defaultAction).buttonStyle(.borderedProminent)
                 }
             }

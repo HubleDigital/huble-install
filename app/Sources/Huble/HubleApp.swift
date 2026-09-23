@@ -26,10 +26,15 @@ struct RootView: View {
             }
         }
         .sheet(item: $model.activeRun) { run in
-            ProgressSheet(run: run) {
-                model.activeRun = nil
-                model.refresh()
-            }
+            ProgressSheet(
+                run: run,
+                onClose: {
+                    model.activeRun = nil
+                    model.refresh()
+                },
+                onRemoveAnyway: run.action.removePath.map { path in
+                    { model.run(.removeVault(path: path, force: true)) }
+                })
         }
         .onAppear { model.refresh() }
     }

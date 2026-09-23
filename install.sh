@@ -27,8 +27,10 @@
 #   HUBLE_PLATFORM_REPO=HubleDigital/huble-platform
 #   HUBLE_ROLE=cx|copy|seo|design|dev|all    skip the role prompt
 #                 (all = orchestrator/test machines, not shown in the menu)
-#   HUBLE_VAULT_MODE=new|clone|skip
+#   HUBLE_VAULT_MODE=new|clone|skip|remove
 #   HUBLE_VAULT_REINIT=/path|no   with skip: re-init that vault (or don't ask)
+#   HUBLE_VAULT_PATH=/path        with remove: the vault to move to the Trash
+#   HUBLE_FORCE=1                 with remove: even when it has unsynced changes
 #   HUBLE_CLIENT_NAME="Client"    with HUBLE_VAULT_MODE=new
 #   HUBLE_VAULT_REPO=owner/repo   with HUBLE_VAULT_MODE=clone
 #   HUBLE_VAULT_ORG=HubleDigital  org whose topic-tagged repos are client vaults
@@ -86,9 +88,12 @@ ok()    { if $JSON_OUT; then emit ok message "$*";    else printf '\033[32m  OK 
 warn()  { if $JSON_OUT; then emit warn message "$*";  else printf '\033[33m  ! %s\033[0m\n' "$*" >&3; fi; }
 note()  { if $JSON_OUT; then emit note message "$*";  else printf '  - %s\n' "$*" >&3; fi; }
 err()   { if $JSON_OUT; then emit error message "$*"; else printf '\033[31m  X %s\033[0m\n' "$*" >&3; fi; } # loud, non-fatal
+FAIL_REASON=""   # machine-readable tag a client can branch on (e.g. unsynced)
 fail()  {
   FAIL_EMITTED=true
-  $JSON_OUT && emit fail message "$*"
+  if $JSON_OUT; then
+    if [ -n "$FAIL_REASON" ]; then emit fail message "$*" reason "$FAIL_REASON"; else emit fail message "$*"; fi
+  fi
   printf '\033[31m  X %s\033[0m\n' "$*" >&2
   exit 1
 }
@@ -648,8 +653,8 @@ fi
 step "Setting up a client vault"
 VAULT_MODE="${HUBLE_VAULT_MODE:-}"
 case "$VAULT_MODE" in
-  new|clone|skip|"") ;;
-  *) fail "HUBLE_VAULT_MODE must be new, clone or skip (got '$VAULT_MODE')." ;;
+  new|clone|skip|remove|"") ;;
+  *) fail "HUBLE_VAULT_MODE must be new, clone, skip or remove (got '$VAULT_MODE')." ;;
 esac
 if [ -z "$VAULT_MODE" ]; then
   if $INTERACTIVE; then
@@ -672,7 +677,8 @@ ROLE="${HUBLE_ROLE:-}"
 if [ -n "$ROLE" ] && ! valid_role "$ROLE"; then
   fail "HUBLE_ROLE must be one of cx, copy, seo, design, dev, all (got '$ROLE')."
 fi
-if [ "$VAULT_MODE" != "skip" ] && [ -z "$ROLE" ]; then
+case "$VAULT_MODE" in new|clone) NEEDS_VAULT=true ;; *) NEEDS_VAULT=false ;; esac
+if $NEEDS_VAULT && [ -z "$ROLE" ]; then
   if $INTERACTIVE; then
     note "Your role sets the Atlas Inspector tab and installs only that stage's"
     note "tooling + a sparse checkout of its slice of the vault."
@@ -680,10 +686,53 @@ if [ "$VAULT_MODE" != "skip" ] && [ -z "$ROLE" ]; then
   ask_role ROLE "$STORED_ROLE"
 fi
 
-if [ "$VAULT_MODE" != "skip" ]; then
+if $NEEDS_VAULT; then
   mkdir -p "$VAULTS_DIR" || fail "Cannot create the vaults folder $VAULTS_DIR."
   note "Vaults folder: $VAULTS_DIR"
 fi
+
+# Obsidian reads obsidian.json only at startup and REWRITES it from memory on
+# quit - editing it while Obsidian runs gets ignored and then overwritten.
+# Quit it first and WAIT FOR THE QUIT TO FULLY FINISH (a slow quit flushes
+# obsidian.json after the 10s mark and silently clobbers our edit - seen in
+# the field). Returns 1 when Obsidian would not quit.
+obsidian_running() { pgrep -xq Obsidian; }
+quit_obsidian() {
+  obsidian_running || return 0
+  note "Quitting Obsidian..."
+  osascript -e 'tell application "Obsidian" to quit' >/dev/null 2>&1 || true
+  local i=0
+  while [ "$i" -lt 30 ]; do
+    obsidian_running || break
+    sleep 1
+    i=$((i+1))
+  done
+  if obsidian_running; then return 1; fi
+  sleep 2   # let the final config flush land before we write
+  return 0
+}
+unregister_vault() { # unregister_vault /abs/path - drop it from Obsidian's vault list
+  node -e '
+    const fs = require("fs"), path = require("path"), os = require("os");
+    const cfgPath = path.join(os.homedir(), "Library/Application Support/obsidian/obsidian.json");
+    let cfg = {};
+    try { cfg = JSON.parse(fs.readFileSync(cfgPath, "utf8")); } catch { process.exit(0); }
+    const target = process.argv[1];
+    let changed = false;
+    for (const [id, v] of Object.entries(cfg.vaults || {})) {
+      if (v && v.path === target) { delete cfg.vaults[id]; changed = true; }
+    }
+    if (changed) fs.writeFileSync(cfgPath, JSON.stringify(cfg));
+  ' "$1"
+}
+move_to_trash() { # move_to_trash /abs/path - Finder Trash (recoverable), mv fallback
+  if osascript -e 'on run argv' -e 'tell application "Finder" to delete (POSIX file (item 1 of argv) as alias)' -e 'end run' "$1" >/dev/null 2>&1; then
+    return 0
+  fi
+  local dest="$HOME/.Trash/$(basename "$1")" n=1
+  while [ -e "$dest" ]; do dest="$HOME/.Trash/$(basename "$1") $n"; n=$((n+1)); done
+  mv "$1" "$dest"
+}
 
 # Client vaults are the org repos tagged with the vault topic - names carry
 # no signal (other teams create client-* repos that are not vaults). gh only
@@ -750,6 +799,66 @@ case "$VAULT_MODE" in
     case "$CLIENT" in */*|.*) fail "Client name '$CLIENT' cannot contain '/' or start with '.'." ;; esac
     VAULT_PATH="$VAULTS_DIR/$CLIENT"
     "$HUBLE" vault init --client "$CLIENT" --vault "$VAULT_PATH" --role "$ROLE"
+    ;;
+  remove)
+    # "Remove from this Mac": Trash the folder (recoverable), forget it in
+    # Obsidian and installer.json. The GitHub repository is NEVER touched -
+    # other machines hold clones and the project can be opened again any
+    # time. Unsynced work blocks the removal unless HUBLE_FORCE=1 (a client
+    # asks the user a second time before setting that).
+    REMOVE_PATH="${HUBLE_VAULT_PATH:-}"
+    if [ -z "$REMOVE_PATH" ]; then ask "  Vault folder to remove" REMOVE_PATH "" HUBLE_VAULT_PATH; fi
+    REMOVE_PATH="$(clean_path "$REMOVE_PATH")"
+    [ -d "$REMOVE_PATH" ] || fail "No folder at $REMOVE_PATH."
+    REMOVE_PATH="$(cd "$REMOVE_PATH" && pwd -P)"
+    # Never a home folder, a drive root or anything that shallow (a vault is
+    # at least /Users/<me>/<vault> or /Volumes/<drive>/<vault> deep).
+    DEPTH="$(printf '%s' "$REMOVE_PATH" | tr -cd '/' | wc -c | tr -d ' ')"
+    if [ "$REMOVE_PATH" = "$HOME" ] || [ "$DEPTH" -lt 3 ]; then fail "Refusing to remove $REMOVE_PATH."; fi
+    if [ ! -e "$REMOVE_PATH/.huble" ] && [ ! -f "$REMOVE_PATH/project-config.json" ]; then
+      fail "$REMOVE_PATH is not a Huble vault (no .huble/ or project-config.json) - not touching it."
+    fi
+    note "Removing $REMOVE_PATH from this Mac (the GitHub repository stays)."
+    UNSYNCED=""
+    if [ -d "$REMOVE_PATH/.git" ]; then
+      if [ -n "$(git -C "$REMOVE_PATH" status --porcelain 2>/dev/null)" ]; then
+        UNSYNCED="uncommitted changes"
+      fi
+      if git -C "$REMOVE_PATH" rev-parse --abbrev-ref '@{u}' >/dev/null 2>&1; then
+        AHEAD="$(git -C "$REMOVE_PATH" rev-list --count '@{u}..HEAD' 2>/dev/null || echo 0)"
+        [ "$AHEAD" -gt 0 ] && UNSYNCED="${UNSYNCED:+$UNSYNCED, }$AHEAD unpushed commit(s)"
+      elif [ -z "$(git -C "$REMOVE_PATH" remote 2>/dev/null)" ]; then
+        UNSYNCED="${UNSYNCED:+$UNSYNCED, }never pushed to GitHub"
+      fi
+    else
+      UNSYNCED="not a git repository (nothing on GitHub)"
+    fi
+    if [ -n "$UNSYNCED" ] && [ "${HUBLE_FORCE:-}" != "1" ]; then
+      warn "This vault has work that is not on GitHub: $UNSYNCED."
+      if $INTERACTIVE; then
+        ask "  Move it to the Trash anyway? (y/N)" REMOVE_ANYWAY "n"
+        case "$REMOVE_ANYWAY" in [Yy]*) ;; *) fail "Removal cancelled - sync the vault to GitHub first." ;; esac
+      else
+        FAIL_REASON="unsynced"
+        fail "This vault has work that is not on GitHub ($UNSYNCED). Sync it in Obsidian first, or remove anyway."
+      fi
+    fi
+    OBSIDIAN_WAS_RUNNING=false
+    obsidian_running && OBSIDIAN_WAS_RUNNING=true
+    if quit_obsidian; then
+      unregister_vault "$REMOVE_PATH"
+      note "Forgotten in Obsidian's vault list."
+    else
+      warn "Obsidian is still shutting down - remove the vault from its vault picker by hand."
+    fi
+    move_to_trash "$REMOVE_PATH" || fail "Could not move $REMOVE_PATH to the Trash."
+    LAST_VAULT="$(json_read "$INSTALLER_STATE" lastVault)"
+    [ "$LAST_VAULT" = "$REMOVE_PATH" ] && json_write "$INSTALLER_STATE" lastVault ""
+    if $OBSIDIAN_WAS_RUNNING && [ -z "${HUBLE_NO_OPEN:-}" ]; then
+      open -a Obsidian 2>/dev/null || open "$HOME/Applications/Obsidian.app" 2>/dev/null || true
+    fi
+    $JSON_OUT && emit vault path "$REMOVE_PATH"
+    ok "Moved to the Trash: $REMOVE_PATH"
     ;;
   skip)
     note "Skipping vault setup (no new vault created)."
@@ -899,26 +1008,11 @@ step "Done"
 if [ -n "$VAULT_PATH" ]; then
   note "Vault: $VAULT_PATH"
   if [ -z "${HUBLE_NO_OPEN:-}" ]; then
-    # Obsidian reads obsidian.json only at startup and REWRITES it from memory
-    # on quit - registering while it runs gets ignored and then overwritten.
-    # Quit it first, WAIT FOR THE QUIT TO FULLY FINISH (a slow quit flushes
-    # obsidian.json after the 10s mark and silently clobbers our registration
-    # - seen in the field), register, relaunch, then VERIFY the entry survived.
-    if pgrep -xq Obsidian; then
-      note "Quitting Obsidian to register the vault..."
-      osascript -e 'tell application "Obsidian" to quit' >/dev/null 2>&1 || true
-      i=0
-      while [ "$i" -lt 30 ]; do
-        pgrep -xq Obsidian || break
-        sleep 1
-        i=$((i+1))
-      done
-      if pgrep -xq Obsidian; then
-        note "Obsidian is still shutting down - skipping auto-registration."
-        note "Open the vault manually: vault picker > 'Open folder as vault' > $VAULT_PATH"
-      fi
-      # Let the final config flush land before we write.
-      sleep 2
+    # Register (see quit_obsidian for why Obsidian must be down first),
+    # relaunch, then VERIFY the entry survived.
+    if ! quit_obsidian; then
+      note "Obsidian is still shutting down - skipping auto-registration."
+      note "Open the vault manually: vault picker > 'Open folder as vault' > $VAULT_PATH"
     fi
     register_vault() {
       node -e '

@@ -55,6 +55,7 @@ struct MainView: View {
 private struct VaultRow: View {
     @Environment(AppModel.self) private var model
     let vault: LocalVault
+    @State private var confirmRemove = false
 
     var body: some View {
         HStack(spacing: 12) {
@@ -70,10 +71,17 @@ private struct VaultRow: View {
                     .truncationMode(.middle)
             }
             Spacer()
+            Button("Remove…") { confirmRemove = true }
             Button("Update vault") { model.run(.updateVault(path: vault.path)) }
             Button("Open in Obsidian") { Obsidian.open(vaultPath: vault.path) }
                 .buttonStyle(.borderedProminent)
         }
         .padding(.vertical, 4)
+        .confirmationDialog("Remove “\(vault.name)” from this Mac?", isPresented: $confirmRemove, titleVisibility: .visible) {
+            Button("Move to Trash", role: .destructive) { model.run(.removeVault(path: vault.path)) }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("The folder moves to the Trash. The GitHub repository is not touched — you can open the project again any time from “Open existing project”.")
+        }
     }
 }

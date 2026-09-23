@@ -51,8 +51,10 @@ topic) — pick a number, or type `owner/name`.
 
 `app/` holds a small macOS app for team members who never open a terminal:
 a list of the projects on this Mac, **New project**, **Open existing
-project** (picks from the tagged client vaults on GitHub), **Update**, and
-**Open in Obsidian**. It has no logic of its own — every action runs the same
+project** (picks from the tagged client vaults on GitHub), **Update**,
+**Open in Obsidian** and **Remove** (moves the folder to the Trash and
+forgets it in Obsidian — the GitHub repository is never touched, and a vault
+with unsynced work asks twice). It has no logic of its own — every action runs the same
 `install.sh` headlessly and shows its progress, including the GitHub
 sign-in code when a first sign-in is needed. Build and signing notes are in
 `app/README.md`; until it is signed with a Developer ID it only runs on the

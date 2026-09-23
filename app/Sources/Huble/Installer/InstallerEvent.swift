@@ -13,6 +13,7 @@ struct InstallerEvent: Decodable {
     var path: String?
     var vault: String?
     var platformUpdated: Bool?
+    var reason: String?
 }
 
 /// What the app asks the installer to do: only env + flags, never a shell string.
@@ -20,6 +21,18 @@ struct InstallerAction {
     var title: String
     var env: [String: String]
     var flags: [String] = []
+    /// Set for a remove action so a `reason: unsynced` failure can offer
+    /// "Remove anyway" (the same action with HUBLE_FORCE=1).
+    var removePath: String?
+
+    /// "Remove from this Mac": Trash + forget in Obsidian. The GitHub repository
+    /// is never touched by the installer.
+    static func removeVault(path: String, force: Bool = false) -> InstallerAction {
+        var env = ["HUBLE_VAULT_MODE": "remove", "HUBLE_VAULT_PATH": path]
+        if force { env["HUBLE_FORCE"] = "1" }
+        let name = (path as NSString).lastPathComponent
+        return InstallerAction(title: "Removing “\(name)” from this Mac", env: env, removePath: path)
+    }
 
     static func setup() -> InstallerAction {
         InstallerAction(title: "Setting up this Mac", env: ["HUBLE_VAULT_MODE": "skip", "HUBLE_VAULT_REINIT": "no", "HUBLE_NO_OPEN": "1"])

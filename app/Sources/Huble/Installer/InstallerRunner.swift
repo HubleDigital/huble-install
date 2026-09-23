@@ -36,6 +36,7 @@ final class InstallerRun: Identifiable {
     private(set) var vaultPath: String?
     private(set) var installerVersion: String?
     private(set) var platformUpdated: Bool?
+    private(set) var failReason: String?   // the contract's machine-readable `reason` on a fail event
 
     private var process: Process?
     private var stdoutBuffer = Data()
@@ -169,6 +170,7 @@ final class InstallerRun: Identifiable {
         case "vault":
             vaultPath = ev.path
         case "fail":
+            failReason = ev.reason
             closeCurrentStep(as: .failed)
             finish(status: .failed(msg.isEmpty ? "The installer failed." : msg))
         case "done":

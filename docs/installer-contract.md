@@ -34,7 +34,9 @@ bootstrap once (with `HUBLE_VAULT_MODE=skip`) to create it.
 | `HUBLE_OUTPUT` | `text` (default) / `json` | output mode, see below |
 | `HUBLE_NONINTERACTIVE` | `1` | never prompt; a missing required value fails with a message. Also implied when there is no controlling terminal. |
 | `HUBLE_NO_OPEN` | `1` | do not register/open the vault in Obsidian at the end |
-| `HUBLE_VAULT_MODE` | `new` / `clone` / `skip` | what to do after tooling is verified. Non-interactive default: `skip` |
+| `HUBLE_VAULT_MODE` | `new` / `clone` / `skip` / `remove` | what to do after tooling is verified. Non-interactive default: `skip` |
+| `HUBLE_VAULT_PATH` | absolute vault path | with `remove`: the vault to remove from this Mac (moved to the Trash, forgotten in Obsidian and `installer.json`). **The GitHub repository is never touched.** |
+| `HUBLE_FORCE` | `1` | with `remove`: proceed although the vault has uncommitted / unpushed / never-pushed work. Without it such a vault fails with `reason: "unsynced"`; a client asks the user a second time before setting it. |
 | `HUBLE_ROLE` | `cx` / `copy` / `seo` / `design` / `dev` / `all` | machine role for the vault. Required (or stored default) for `new`/`clone` |
 | `HUBLE_VAULTS_DIR` | absolute path | folder that will contain the vault folder |
 | `HUBLE_CLIENT_NAME` | string | with `new`: vault at `$HUBLE_VAULTS_DIR/<name>` |
@@ -94,7 +96,7 @@ show as a raw log. Clients must rely on events, not on stderr, for state.
 | `error` | `message` | serious non-fatal problem (e.g. platform not updated); the run continues |
 | `gh_auth` | `code`, `url` | show `code` to the user and open `url`. The installer keeps polling until sign-in completes. |
 | `vault` | `path` | the vault this run created, cloned or re-initialised |
-| `fail` | `message` | fatal; exit code 1 follows |
+| `fail` | `message`, optional `reason` | fatal; exit code 1 follows. `reason` is a machine-readable tag a client may branch on. Defined: `unsynced` (remove refused because work is not on GitHub; retry with `HUBLE_FORCE=1` after a second confirmation). |
 | `done` | `vault` (path or ""), `platformUpdated` (bool) | success; exit code 0 follows |
 
 Example:
