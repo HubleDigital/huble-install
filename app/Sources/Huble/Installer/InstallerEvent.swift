@@ -24,6 +24,15 @@ struct InstallerAction {
     /// Set for a remove action so a `reason: unsynced` failure can offer
     /// "Remove anyway" (the same action with HUBLE_FORCE=1).
     var removePath: String?
+    /// Exit 0 counts as success even without a `done` event. Only for
+    /// `--refresh` against a saved copy older than 2.4.0, which exits before
+    /// printing the contract line.
+    var lenientExit = false
+
+    /// Re-download ~/.huble/install.sh only; no platform run.
+    static func refreshInstaller(from: String, to: String) -> InstallerAction {
+        InstallerAction(title: "Updating the installer (\(from) → \(to))", env: [:], flags: ["--refresh"], lenientExit: true)
+    }
 
     /// "Remove from this Mac": Trash + forget in Obsidian. The GitHub repository
     /// is never touched by the installer.

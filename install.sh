@@ -41,7 +41,7 @@
 #   HUBLE_NO_OPEN=1               don't open Obsidian at the end
 set -euo pipefail
 
-INSTALLER_VERSION="2.3.0"
+INSTALLER_VERSION="2.4.0"
 CONTRACT_VERSION="v1"
 # Additive capabilities within contract v1. A client that needs one checks
 # for it in the contract event / line instead of guessing from the version.
@@ -216,23 +216,26 @@ check_updates() {
     printf 'installer: %s (local %s, remote %s)\n' "$istatus" "$INSTALLER_VERSION" "${iremote:-?}" >&3
   fi
 }
+# The contract line is ALWAYS the first thing on stdout - a client checks it
+# before trusting anything else, flags included (--version is the one
+# exception: its whole output is the bare version).
+case " $* " in *" --version "*) ;; *) print_contract ;; esac
 for arg in "$@"; do
   case "$arg" in
-    --contract) print_contract; exit 0 ;;
+    --contract) exit 0 ;;
     --check) check_updates; exit 0 ;;
     --version) printf '%s\n' "$INSTALLER_VERSION" >&3; exit 0 ;;
     --refresh)
+      $JSON_OUT && emit step message "Updating the installer"
       refresh_self || fail "Could not download the installer from $INSTALL_URL."
-      ok "Installer saved to $HUBLE_HOME/install.sh"
+      ok "Installer saved to $HUBLE_HOME/install.sh ($(sed -n 's/^INSTALLER_VERSION="\([^"]*\)".*/\1/p' "$HUBLE_HOME/install.sh" | head -1))"
+      $JSON_OUT && emit done vault "" platformUpdated false platformUpdate "skipped"
       exit 0 ;;
     --help|-h) usage; exit 0 ;;
     *) fail "Unknown flag '$arg' (try --help)." ;;
   esac
 done
 
-# The contract line is ALWAYS the first thing on stdout - a client checks it
-# before trusting anything else.
-print_contract
 
 # One-time migration from the old visible ~/Huble layout: move the tooling
 # dirs into ~/.huble, repoint vault pipelineRoot configs and the .zprofile

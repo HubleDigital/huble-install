@@ -134,6 +134,8 @@ final class InstallerRun: Identifiable {
 
     private func handle(_ ev: InstallerEvent) {
         if !sawContract {
+            // A pre-2.4.0 saved copy answers --refresh without a contract line.
+            if action.lenientExit && ev.event != "contract" { sawContract = true; handle(ev); return }
             guard ev.event == "contract", ev.contract == "v1" else {
                 cancelRequested = true
                 process?.terminate()
@@ -211,6 +213,9 @@ final class InstallerRun: Identifiable {
         if cancelRequested {
             closeCurrentStep(as: .failed)
             finish(status: .cancelled)
+        } else if code == 0 && action.lenientExit {
+            closeCurrentStep(as: .ok)
+            finish(status: .succeeded)
         } else {
             closeCurrentStep(as: .failed)
             let why = sawContract

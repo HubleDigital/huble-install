@@ -24,7 +24,7 @@ bootstrap once (with `HUBLE_VAULT_MODE=skip`) to create it.
 |---|---|
 | `--contract` | print the contract line (text) or the `contract` event (json) and exit 0. No side effects. |
 | `--version` | print the installer version and exit 0. |
-| `--refresh` | re-download `install.sh` from `HUBLE_INSTALL_URL` into `~/.huble/install.sh` and exit. Nothing else. |
+| `--refresh` | re-download `install.sh` from `HUBLE_INSTALL_URL` into `~/.huble/install.sh` and exit. Nothing else. In json mode (since 2.4.0): `contract`, `step`, `ok`, `done`. Clients label this "Update installer" when `--check` says only the installer is behind; a platform run refreshes the copy too, so "platform and installer" is one `updatePlatform` run. |
 | `--check` | **read-only** update report and exit 0 (feature `check`). Never pulls, resets or installs. Fetches `origin/<default branch>` of `~/.huble/platform` and compares; downloads the installer at `HUBLE_INSTALL_URL` to compare versions. Offline → `unknown`, never an error. |
 | `--help` | usage. |
 
@@ -36,8 +36,11 @@ bootstrap once (with `HUBLE_VAULT_MODE=skip`) to create it.
  "installer":{"status":"current|available|unknown","local":"2.1.0","remote":"2.2.0"}}
 ```
 
-Rules, so every client shows the same thing: a client shows **"Update platform"
-only when** `status == "available"` or `installer.status == "available"`.
+Rules, so every client shows the same thing — label by cause:
+only `installer.status == "available"` → **"Update installer (local → remote)"**
+(runs `--refresh`); only `status == "available"` → **"Update platform"** with
+`platform.behind` shown small; both → **"Update platform and installer"** (one
+platform run, which also refreshes the saved copy).
 `blocked` (dirty or ahead checkout) shows the reason, never the button — the
 update path refuses to reset such a checkout anyway. `missing` offers setup.
 `unknown` shows nothing or a quiet "couldn't check". Re-check on launch, after
@@ -140,7 +143,7 @@ show as a raw log. Clients must rely on events, not on stderr, for state.
 Example:
 
 ```
-{"event":"contract","contract":"v1","version":"2.3.0","features":["platform-update-skip","remove","reinit-open","check"]}
+{"event":"contract","contract":"v1","version":"2.4.0","features":["platform-update-skip","remove","reinit-open","check"]}
 {"event":"step","message":"Checking developer tools (git)"}
 {"event":"ok","message":"Command Line Tools present"}
 {"event":"gh_auth","code":"AB12-CD34","url":"https://github.com/login/device"}

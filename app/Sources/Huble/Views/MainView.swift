@@ -91,10 +91,29 @@ struct MainView: View {
             } else if model.checkingUpdates && model.updateCheck == nil {
                 ProgressView().controlSize(.mini)
             } else if let c = model.updateCheck {
-                if c.updateAvailable {
+                let platformBehind = c.status == "available"
+                let installerBehind = c.installer.status == "available"
+                // Label by cause, so the app never says "platform" when only the
+                // saved installer moved (the plugin's Get Started would show nothing).
+                if platformBehind && installerBehind {
+                    Button("Update platform and installer") { model.run(.updatePlatform()) }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(!model.installerPresent)
+                        .help("Platform \(c.platform.behind.map { "\($0) commit(s) behind" } ?? "behind"); installer \(c.installer.local) → \(c.installer.remote). A platform run also refreshes the saved installer.")
+                } else if platformBehind {
+                    if let n = c.platform.behind {
+                        Text("\(n) commit\(n == 1 ? "" : "s") behind").font(.caption)
+                    }
                     Button("Update platform") { model.run(.updatePlatform()) }
                         .buttonStyle(.borderedProminent)
                         .disabled(!model.installerPresent)
+                } else if installerBehind {
+                    Button("Update installer (\(c.installer.local) → \(c.installer.remote))") {
+                        model.run(.refreshInstaller(from: c.installer.local, to: c.installer.remote))
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(!model.installerPresent)
+                    .help("Re-downloads ~/.huble/install.sh only. No platform change.")
                 } else if c.blocked {
                     Label("Update blocked: local changes in ~/.huble/platform", systemImage: "exclamationmark.triangle")
                         .foregroundStyle(.orange)
