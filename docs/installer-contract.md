@@ -140,7 +140,7 @@ show as a raw log. Clients must rely on events, not on stderr, for state.
 Example:
 
 ```
-{"event":"contract","contract":"v1","version":"2.2.0","features":["platform-update-skip","remove","reinit-open","check"]}
+{"event":"contract","contract":"v1","version":"2.3.0","features":["platform-update-skip","remove","reinit-open","check"]}
 {"event":"step","message":"Checking developer tools (git)"}
 {"event":"ok","message":"Command Line Tools present"}
 {"event":"gh_auth","code":"AB12-CD34","url":"https://github.com/login/device"}

@@ -41,7 +41,7 @@
 #   HUBLE_NO_OPEN=1               don't open Obsidian at the end
 set -euo pipefail
 
-INSTALLER_VERSION="2.2.0"
+INSTALLER_VERSION="2.3.0"
 CONTRACT_VERSION="v1"
 # Additive capabilities within contract v1. A client that needs one checks
 # for it in the contract event / line instead of guessing from the version.
