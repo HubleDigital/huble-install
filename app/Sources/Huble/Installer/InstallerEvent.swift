@@ -54,8 +54,11 @@ struct InstallerAction {
 
     /// Re-installs the vault's plugin/skills/commands from the platform already
     /// on this Mac (`huble cx init`). Not a sync: no pull, no client data touched.
-    static func updateVault(path: String) -> InstallerAction {
-        InstallerAction(title: "Updating Atlas in “\((path as NSString).lastPathComponent)”", env: ["HUBLE_VAULT_MODE": "skip", "HUBLE_VAULT_REINIT": path, "HUBLE_NO_OPEN": "1"].merging(noPlatformUpdate) { a, _ in a })
+    /// `role` is required when the vault never recorded one (cx init then records it).
+    static func updateVault(path: String, role: String? = nil) -> InstallerAction {
+        var env = ["HUBLE_VAULT_MODE": "skip", "HUBLE_VAULT_REINIT": path, "HUBLE_NO_OPEN": "1"].merging(noPlatformUpdate) { a, _ in a }
+        if let role { env["HUBLE_ROLE"] = role }
+        return InstallerAction(title: "Updating Atlas in “\((path as NSString).lastPathComponent)”", env: env)
     }
 
     static func newProject(client: String, role: String, vaultsDir: String) -> InstallerAction {

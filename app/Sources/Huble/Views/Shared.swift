@@ -2,8 +2,15 @@ import AppKit
 import SwiftUI
 
 let hubleRoles = ["cx", "copy", "seo", "design", "dev"]
+/// Roles offered when a vault has no recorded one: `all` is a real machine
+/// role (orchestrator / test machines), just not a default in the pickers.
+let hubleRolesWithAll = hubleRoles + ["all"]
 
 enum Obsidian {
+    static var isRunning: Bool {
+        !NSRunningApplication.runningApplications(withBundleIdentifier: "md.obsidian").isEmpty
+    }
+
     /// `obsidian://open?path=<encoded>` for a vault Obsidian already knows.
     static func open(vaultPath: String) {
         var allowed = CharacterSet.alphanumerics

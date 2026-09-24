@@ -123,6 +123,18 @@ private struct VaultRow: View {
     let vault: LocalVault
     @State private var confirmRemove = false
     @State private var openVaultNotice = false
+    @State private var pickRoleForUpdate = false
+
+    /// What Remove will do to Obsidian, said before the user confirms.
+    private var removeMessage: String {
+        var s = "The folder moves to the Trash. The GitHub repository is not touched — you can clone the project again any time with “Clone project”."
+        if vault.openInObsidian {
+            s += "\n\nThis vault is open in Obsidian: Obsidian will close to forget it. Other open vaults reopen afterwards; anything running in them (an agent chat, an unsaved edit) is interrupted. If this is the only open vault, Obsidian stays closed."
+        } else if Obsidian.isRunning {
+            s += "\n\nObsidian stays open; it forgets this vault the next time it is closed."
+        }
+        return s
+    }
 
     var body: some View {
         HStack(spacing: 12) {
@@ -147,7 +159,20 @@ private struct VaultRow: View {
                     // Open in Obsidian: re-initialising would swap the plugin under
                     // the running app. The vault's own Get Started page updates it
                     // in place, so send the user there instead of running here.
-                    if vault.openInObsidian { openVaultNotice = true } else { model.run(.updateVault(path: vault.path)) }
+                    // No recorded role: cx init needs one (and records it).
+                    if vault.openInObsidian { openVaultNotice = true }
+                    else if vault.role == nil { pickRoleForUpdate = true }
+                    else { model.run(.updateVault(path: vault.path)) }
+                }
+                .confirmationDialog("Which role is this vault used for on this Mac?", isPresented: $pickRoleForUpdate, titleVisibility: .visible) {
+                    ForEach(hubleRolesWithAll, id: \.self) { r in
+                        Button(r == "all" ? "All (orchestrator / test machine)" : r.uppercased()) {
+                            model.run(.updateVault(path: vault.path, role: r))
+                        }
+                    }
+                    Button("Cancel", role: .cancel) {}
+                } message: {
+                    Text("“\(vault.name)” has no recorded role yet. The role picks the Atlas tooling installed in it and is remembered for this vault.")
                 }
                 .disabled(!model.installerPresent)
                 .help(vault.pluginVersion.map { "Atlas \($0) installed, platform ships \(model.platformPluginVersion ?? "?"). Re-installs the plugin, skills and commands — does not sync project files." } ?? "Atlas plugin not installed in this vault")
@@ -163,10 +188,12 @@ private struct VaultRow: View {
         }
         .padding(.vertical, 4)
         .confirmationDialog("Remove “\(vault.name)” from this Mac?", isPresented: $confirmRemove, titleVisibility: .visible) {
-            Button("Move to Trash", role: .destructive) { model.run(.removeVault(path: vault.path)) }
+            Button(vault.openInObsidian ? "Close Obsidian and move to Trash" : "Move to Trash", role: .destructive) {
+                model.run(.removeVault(path: vault.path))
+            }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("The folder moves to the Trash. The GitHub repository is not touched — you can clone the project again any time with “Clone project”.")
+            Text(removeMessage)
         }
     }
 }

@@ -324,9 +324,9 @@ ask_role() { # ask_role varname [default] - prompt until a valid role
   local r default="${2:-}"
   if $INTERACTIVE && [ -z "$default" ]; then default="cx"; fi
   while :; do
-    ask "  Your role (cx / copy / seo / design / dev)" r "$default" HUBLE_ROLE
+    ask "  Your role (cx / copy / seo / design / dev, or all)" r "$default" HUBLE_ROLE
     if valid_role "$r"; then break; fi
-    warn "Unknown role '$r' - choose one of: cx / copy / seo / design / dev"
+    warn "Unknown role '$r' - choose one of: cx / copy / seo / design / dev / all"
   done
   eval "$1=\"\$r\""
 }
@@ -730,12 +730,28 @@ if [ -z "${HUBLE_VAULTS_DIR:-}" ] && [ "$LAUNCH_DIR" = "$HOME" ] && [ -n "$STORE
 fi
 
 # ---------------------------------------------------------------- Client vault
-step "Setting up a client vault"
 VAULT_MODE="${HUBLE_VAULT_MODE:-}"
 case "$VAULT_MODE" in
   new|clone|skip|remove|"") ;;
   *) fail "HUBLE_VAULT_MODE must be new, clone, skip or remove (got '$VAULT_MODE')." ;;
 esac
+# The step label names what this run does to a vault (a GUI shows it as the
+# progress row). Only the interactive menu path gets the generic label.
+if [ -n "$VAULT_MODE" ]; then
+  case "$VAULT_MODE" in
+    new)    step "Creating ${HUBLE_CLIENT_NAME:-a new client vault}" ;;
+    clone)  step "Cloning ${HUBLE_VAULT_REPO:-a client vault}" ;;
+    remove) step "Removing $(basename "${HUBLE_VAULT_PATH:-a vault}") from this Mac" ;;
+    skip)
+      case "${HUBLE_VAULT_REINIT:-}" in
+        no) ;;                                    # nothing vault-related happens - no step
+        "") step "Setting up a client vault" ;;   # may offer a re-init below
+        *)  step "Updating Atlas in $(basename "$HUBLE_VAULT_REINIT")" ;;
+      esac ;;
+  esac
+else
+  step "Setting up a client vault"
+fi
 if [ -z "$VAULT_MODE" ]; then
   if $INTERACTIVE; then
     printf '  How do you want to start?\n' > /dev/tty
@@ -804,6 +820,39 @@ unregister_vault() { # unregister_vault /abs/path - drop it from Obsidian's vaul
     }
     if (changed) fs.writeFileSync(cfgPath, JSON.stringify(cfg));
   ' "$1"
+}
+# obsidian_open_state /abs/path -> "true|false N": is THIS vault open in
+# Obsidian, and how many OTHER vaults are open (decides whether a relaunch
+# after a forced quit would land the user somewhere sensible).
+obsidian_open_state() {
+  node -e '
+    const fs = require("fs"), path = require("path"), os = require("os");
+    const cfgPath = path.join(os.homedir(), "Library/Application Support/obsidian/obsidian.json");
+    let cfg = {};
+    try { cfg = JSON.parse(fs.readFileSync(cfgPath, "utf8")); } catch {}
+    let mine = false, others = 0;
+    for (const v of Object.values(cfg.vaults || {})) {
+      if (!v || !v.open) continue;
+      if (v.path === process.argv[1]) mine = true; else others++;
+    }
+    process.stdout.write((mine ? "true" : "false") + " " + others);
+  ' "$1" 2>/dev/null || printf 'false 0'
+}
+# Obsidian rewrites obsidian.json from memory on quit, so an entry removed
+# while it runs comes back. Entries that could not be dropped safely are
+# queued here and dropped at the next moment Obsidian is not running.
+FORGET_QUEUE="$HUBLE_HOME/obsidian-forget.txt"
+queue_forget() {
+  mkdir -p "$HUBLE_HOME"
+  grep -qxF -- "$1" "$FORGET_QUEUE" 2>/dev/null || printf '%s\n' "$1" >> "$FORGET_QUEUE"
+}
+apply_pending_forgets() {
+  [ -f "$FORGET_QUEUE" ] || return 0
+  obsidian_running && return 0
+  local p
+  while IFS= read -r p; do [ -n "$p" ] && unregister_vault "$p"; done < "$FORGET_QUEUE"
+  rm -f "$FORGET_QUEUE"
+  note "Dropped previously removed vault(s) from Obsidian's vault list."
 }
 move_to_trash() { # move_to_trash /abs/path - Finder Trash (recoverable), mv fallback
   if osascript -e 'on run argv' -e 'tell application "Finder" to delete (POSIX file (item 1 of argv) as alias)' -e 'end run' "$1" >/dev/null 2>&1; then
@@ -923,25 +972,46 @@ case "$VAULT_MODE" in
         fail "This vault has work that is not on GitHub ($UNSYNCED). Sync it in Obsidian first, or remove anyway."
       fi
     fi
-    OBSIDIAN_WAS_RUNNING=false
-    obsidian_running && OBSIDIAN_WAS_RUNNING=true
-    if quit_obsidian; then
+    # Quitting Obsidian closes EVERY open vault (and any agent chat in them),
+    # so it happens only when THIS vault is open - it cannot be trashed
+    # underneath a live window. A closed vault is trashed in place and its
+    # list entry is queued (Obsidian would resurrect an edit made while it
+    # runs); it is dropped the next time Obsidian is not running.
+    VAULT_OPEN=false; OTHER_OPEN=0
+    if obsidian_running; then
+      OPEN_STATE="$(obsidian_open_state "$REMOVE_PATH")"
+      VAULT_OPEN="${OPEN_STATE%% *}"; OTHER_OPEN="${OPEN_STATE##* }"
+    fi
+    if ! obsidian_running; then
       unregister_vault "$REMOVE_PATH"
+      apply_pending_forgets
+      note "Forgotten in Obsidian's vault list."
+    elif [ "$VAULT_OPEN" = true ]; then
+      note "This vault is open in Obsidian - quitting Obsidian to close it..."
+      quit_obsidian || fail "Obsidian did not quit - close it yourself, then remove the vault again."
+      unregister_vault "$REMOVE_PATH"
+      apply_pending_forgets
       note "Forgotten in Obsidian's vault list."
     else
-      warn "Obsidian is still shutting down - remove the vault from its vault picker by hand."
+      queue_forget "$REMOVE_PATH"
+      note "Obsidian stays open (this vault is not open in it) - it forgets the vault the next time it is closed."
     fi
     move_to_trash "$REMOVE_PATH" || fail "Could not move $REMOVE_PATH to the Trash."
     LAST_VAULT="$(json_read "$INSTALLER_STATE" lastVault)"
     [ "$LAST_VAULT" = "$REMOVE_PATH" ] && json_write "$INSTALLER_STATE" lastVault ""
-    if $OBSIDIAN_WAS_RUNNING && [ -z "${HUBLE_NO_OPEN:-}" ]; then
-      open -a Obsidian 2>/dev/null || open "$HOME/Applications/Obsidian.app" 2>/dev/null || true
+    if [ "$VAULT_OPEN" = true ] && [ -z "${HUBLE_NO_OPEN:-}" ]; then
+      if [ "$OTHER_OPEN" -gt 0 ]; then
+        note "Reopening Obsidian with the other vault(s) that were open..."
+        open -a Obsidian 2>/dev/null || open "$HOME/Applications/Obsidian.app" 2>/dev/null || true
+      else
+        note "Obsidian left closed - this was the only vault open in it."
+      fi
     fi
     $JSON_OUT && emit vault path "$REMOVE_PATH"
     ok "Moved to the Trash: $REMOVE_PATH"
     ;;
   skip)
-    note "Skipping vault setup (no new vault created)."
+    [ "${HUBLE_VAULT_REINIT:-}" = "no" ] || note "Skipping vault setup (no new vault created)."
     # Re-runs default to skip, which used to leave the vault's plugin/skills/
     # commands on the old version while the platform updated underneath.
     # Offer a re-init of the existing vault so both move in lockstep;
@@ -1096,12 +1166,17 @@ fi
 
 # ---------------------------------------------------------------- Done
 step "Done"
+# Any run that finds Obsidian closed is the safe moment to drop the list
+# entries of vaults removed while it was open elsewhere.
+obsidian_running || apply_pending_forgets
 if [ -n "$VAULT_PATH" ]; then
   note "Vault: $VAULT_PATH"
   if [ -z "${HUBLE_NO_OPEN:-}" ]; then
     # Register (see quit_obsidian for why Obsidian must be down first),
     # relaunch, then VERIFY the entry survived.
-    if ! quit_obsidian; then
+    if quit_obsidian; then
+      apply_pending_forgets
+    else
       note "Obsidian is still shutting down - skipping auto-registration."
       note "Open the vault manually: vault picker > 'Open folder as vault' > $VAULT_PATH"
     fi
