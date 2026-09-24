@@ -12,10 +12,6 @@ struct LocalVault: Identifiable, Hashable {
     /// Installed Atlas plugin version (`.obsidian/plugins/atlas-cx/manifest.json`);
     /// nil when the plugin is not installed in this vault.
     let pluginVersion: String?
-    /// Obsidian is running and has this vault open (obsidian.json `open: true`).
-    /// Re-initialising an open vault swaps the plugin under the running app,
-    /// so the app sends the user to the vault's own Get Started page instead.
-    let openInObsidian: Bool
 }
 
 enum VaultScanner {
@@ -23,16 +19,12 @@ enum VaultScanner {
         let fm = FileManager.default
         var seen = Set<String>()
         var vaults: [LocalVault] = []
-        let obsidianRunning = !NSRunningApplication.runningApplications(withBundleIdentifier: "md.obsidian").isEmpty
-        let openPaths = obsidianRunning ? obsidianOpenVaultPaths() : []
-
         func add(_ path: String) {
             let p = (path as NSString).standardizingPath
             guard !seen.contains(p), isVault(p) else { return }
             seen.insert(p)
             vaults.append(LocalVault(name: displayName(p), path: p, role: role(of: p), origin: origin(of: p),
-                                     pluginVersion: manifestVersion(at: p + "/.obsidian/plugins/atlas-cx/manifest.json"),
-                                     openInObsidian: openPaths.contains(p)))
+                                     pluginVersion: manifestVersion(at: p + "/.obsidian/plugins/atlas-cx/manifest.json")))
         }
 
         if let dir = state.vaultsDir,
@@ -60,6 +52,15 @@ enum VaultScanner {
 
     static func obsidianVaultPaths() -> [String] {
         obsidianVaultEntries().compactMap { $0["path"] as? String }.sorted()
+    }
+
+    /// Obsidian is running AND has this vault open. Computed at click time,
+    /// never cached: a scan result goes stale the moment the user quits
+    /// Obsidian. obsidian.json keeps `open: true` across quits (so Obsidian
+    /// can reopen the vault), so the running-process check is the gate.
+    static func isOpenInObsidian(_ path: String) -> Bool {
+        guard Obsidian.isRunning else { return false }
+        return obsidianOpenVaultPaths().contains((path as NSString).standardizingPath)
     }
 
     /// Vaults Obsidian currently has a window open for.

@@ -141,18 +141,28 @@ private struct VaultRow: View {
     @Environment(AppModel.self) private var model
     let vault: LocalVault
     @State private var confirmRemove = false
-    @State private var openVaultNotice = false
+    @State private var reloadNotice = false
     @State private var pickRoleForUpdate = false
+    /// Obsidian state sampled when the button was clicked (never from the scan —
+    /// that goes stale the moment the user quits Obsidian).
+    @State private var vaultOpenAtClick = false
 
     /// What Remove will do to Obsidian, said before the user confirms.
     private var removeMessage: String {
         var s = "The folder moves to the Trash. The GitHub repository is not touched — you can clone the project again any time with “Clone project”."
-        if vault.openInObsidian {
+        if vaultOpenAtClick {
             s += "\n\nThis vault is open in Obsidian: Obsidian will close to forget it. Other open vaults reopen afterwards; anything running in them (an agent chat, an unsaved edit) is interrupted. If this is the only open vault, Obsidian stays closed."
         } else if Obsidian.isRunning {
             s += "\n\nObsidian stays open; it forgets this vault the next time it is closed."
         }
         return s
+    }
+
+    /// Update Atlas is never blocked: `huble cx init` on a live vault is safe
+    /// (Obsidian keeps the loaded plugin until a reload). Running Obsidian
+    /// only earns a reload reminder; a missing role earns the role picker.
+    private func startAtlasUpdate() {
+        if vault.role == nil { pickRoleForUpdate = true } else { model.run(.updateVault(path: vault.path)) }
     }
 
     var body: some View {
@@ -169,19 +179,18 @@ private struct VaultRow: View {
                     .truncationMode(.middle)
             }
             Spacer()
-            Button("Remove…") { confirmRemove = true }.disabled(!model.installerPresent)
+            Button("Remove…") {
+                vaultOpenAtClick = VaultScanner.isOpenInObsidian(vault.path)
+                confirmRemove = true
+            }.disabled(!model.installerPresent)
             // Only when the vault's installed plugin differs from the one the
             // platform ships (what cx init installs) — equal means nothing to do.
             // Not a sync: it re-installs plugin/skills/commands, nothing else.
             if model.vaultNeedsUpdate(vault) {
                 Button("Update Atlas in this vault") {
-                    // Open in Obsidian: re-initialising would swap the plugin under
-                    // the running app. The vault's own Get Started page updates it
-                    // in place, so send the user there instead of running here.
-                    // No recorded role: cx init needs one (and records it).
-                    if vault.openInObsidian { openVaultNotice = true }
-                    else if vault.role == nil { pickRoleForUpdate = true }
-                    else { model.run(.updateVault(path: vault.path)) }
+                    // Only "is Obsidian running right now" is reliable (checked at
+                    // click time); obsidian.json's open flags survive a quit.
+                    if Obsidian.isRunning { reloadNotice = true } else { startAtlasUpdate() }
                 }
                 .confirmationDialog("Which role is this vault used for on this Mac?", isPresented: $pickRoleForUpdate, titleVisibility: .visible) {
                     ForEach(hubleRolesWithAll, id: \.self) { r in
@@ -195,11 +204,11 @@ private struct VaultRow: View {
                 }
                 .disabled(!model.installerPresent)
                 .help(vault.pluginVersion.map { "Atlas \($0) installed, platform ships \(model.platformPluginVersion ?? "?"). Re-installs the plugin, skills and commands — does not sync project files." } ?? "Atlas plugin not installed in this vault")
-                .confirmationDialog("“\(vault.name)” is open in Obsidian", isPresented: $openVaultNotice, titleVisibility: .visible) {
-                    Button("Open in Obsidian") { Obsidian.open(vaultPath: vault.path) }
+                .confirmationDialog("Obsidian is running", isPresented: $reloadNotice, titleVisibility: .visible) {
+                    Button("Update now") { startAtlasUpdate() }
                     Button("Cancel", role: .cancel) {}
                 } message: {
-                    Text("Update it from inside the vault: Obsidian → Get Started → Update platform. That updates Atlas in place without swapping files under the running app.")
+                    Text("The update is safe while Obsidian runs — it keeps the Atlas it already loaded. After the update, reload that vault in Obsidian (Cmd+R) to use the new Atlas.")
                 }
             }
             Button("Open in Obsidian") { Obsidian.open(vaultPath: vault.path) }
@@ -207,7 +216,7 @@ private struct VaultRow: View {
         }
         .padding(.vertical, 4)
         .confirmationDialog("Remove “\(vault.name)” from this Mac?", isPresented: $confirmRemove, titleVisibility: .visible) {
-            Button(vault.openInObsidian ? "Close Obsidian and move to Trash" : "Move to Trash", role: .destructive) {
+            Button(vaultOpenAtClick ? "Close Obsidian and move to Trash" : "Move to Trash", role: .destructive) {
                 model.run(.removeVault(path: vault.path))
             }
             Button("Cancel", role: .cancel) {}
