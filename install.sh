@@ -41,7 +41,7 @@
 #   HUBLE_NO_OPEN=1               don't open Obsidian at the end
 set -euo pipefail
 
-INSTALLER_VERSION="2.4.0"
+INSTALLER_VERSION="2.4.1"
 CONTRACT_VERSION="v1"
 # Additive capabilities within contract v1. A client that needs one checks
 # for it in the contract event / line instead of guessing from the version.
@@ -179,6 +179,16 @@ print_contract() {
 # network failure is reported as "unknown", not as an error (exit 0 always).
 # A dirty or ahead checkout is "blocked", never "available" - the update
 # path would refuse to reset it anyway.
+version_cmp() { # version_cmp A B -> lt | eq | gt (dot-separated numeric parts; missing parts = 0)
+  local a="$1" b="$2" i x y
+  for i in 1 2 3 4; do
+    x="$(printf '%s' "$a" | cut -d. -f"$i" | tr -cd '0-9')"; y="$(printf '%s' "$b" | cut -d. -f"$i" | tr -cd '0-9')"
+    x="${x:-0}"; y="${y:-0}"
+    if [ "$x" -lt "$y" ]; then printf 'lt'; return; fi
+    if [ "$x" -gt "$y" ]; then printf 'gt'; return; fi
+  done
+  printf 'eq'
+}
 check_updates() {
   local pdir="$HUBLE_HOME/platform" pstate="missing" branch="" fetched=false
   local behind=null ahead=null dirty=false lrev="" rrev="" iremote=""
@@ -203,9 +213,16 @@ check_updates() {
   elif $fetched && [ "$behind" != null ]; then
     if [ "$behind" -gt 0 ]; then status="available"; else status="current"; fi
   fi
+  # Numeric compare, part by part: "available" only when remote is NEWER. A
+  # local copy ahead of the raw URL (dev checkout, or the CDN lagging a push
+  # for minutes) must never be offered a "downgrade".
   local istatus="unknown"
   if [ -n "$iremote" ]; then
-    if [ "$iremote" = "$INSTALLER_VERSION" ]; then istatus="current"; else istatus="available"; fi
+    case "$(version_cmp "$INSTALLER_VERSION" "$iremote")" in
+      lt) istatus="available" ;;
+      gt) istatus="ahead" ;;
+      *)  istatus="current" ;;
+    esac
   fi
   if $JSON_OUT; then
     printf '{"event":"check","status":"%s","platform":{"state":"%s","behind":%s,"ahead":%s,"dirty":%s,"local":"%s","remote":"%s","branch":"%s"},"installer":{"status":"%s","local":"%s","remote":"%s"}}\n' \

@@ -33,8 +33,12 @@ bootstrap once (with `HUBLE_VAULT_MODE=skip`) to create it.
 ```
 {"event":"check","status":"current|available|blocked|missing|unknown",
  "platform":{"state":"ok|missing","behind":3,"ahead":0,"dirty":false,"local":"fdc85a3","remote":"9a1c2e0","branch":"main"},
- "installer":{"status":"current|available|unknown","local":"2.1.0","remote":"2.2.0"}}
+ "installer":{"status":"current|available|ahead|unknown","local":"2.1.0","remote":"2.2.0"}}
 ```
+
+Installer versions are compared numerically part by part: `available` only
+when the remote is **newer**; a local copy ahead of the URL (a dev checkout,
+or the CDN lagging a push for minutes) reports `ahead`, never an update.
 
 Rules, so every client shows the same thing — label by cause:
 only `installer.status == "available"` → **"Update installer (local → remote)"**
@@ -143,7 +147,7 @@ show as a raw log. Clients must rely on events, not on stderr, for state.
 Example:
 
 ```
-{"event":"contract","contract":"v1","version":"2.4.0","features":["platform-update-skip","remove","reinit-open","check"]}
+{"event":"contract","contract":"v1","version":"2.4.1","features":["platform-update-skip","remove","reinit-open","check"]}
 {"event":"step","message":"Checking developer tools (git)"}
 {"event":"ok","message":"Command Line Tools present"}
 {"event":"gh_auth","code":"AB12-CD34","url":"https://github.com/login/device"}
