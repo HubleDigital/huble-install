@@ -19,7 +19,9 @@ struct RootView: View {
     var body: some View {
         @Bindable var model = model
         Group {
-            if model.installerPresent {
+            // Fresh Mac = no platform. A missing ~/.huble/install.sh on a Mac
+            // that has the platform is handled inside MainView (banner + silent fetch).
+            if model.platformPresent {
                 MainView()
             } else {
                 SetupView()

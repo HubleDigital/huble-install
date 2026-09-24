@@ -15,6 +15,13 @@ enum Bootstrap {
         FileManager.default.isReadableFile(atPath: Shell.installerPath)
     }
 
+    /// The platform checkout with its CLI — the real "this Mac is set up" signal.
+    static var platformExists: Bool {
+        let fm = FileManager.default
+        return fm.fileExists(atPath: Shell.hubleHome + "/platform/.git")
+            && fm.fileExists(atPath: Shell.hubleHome + "/platform/huble-pipeline/bin/huble")
+    }
+
     enum BootstrapError: LocalizedError {
         case badResponse(Int)
         case notAScript

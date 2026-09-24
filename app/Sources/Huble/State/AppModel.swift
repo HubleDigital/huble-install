@@ -4,7 +4,15 @@ import Observation
 @MainActor
 @Observable
 final class AppModel {
+    /// Whether the platform is on this Mac decides fresh-Mac vs main window.
+    /// `~/.huble/install.sh` is NOT the signal: Macs set up before contract v1
+    /// have the platform but no saved installer, and must not look fresh.
+    var platformPresent = Bootstrap.platformExists
     var installerPresent = Bootstrap.installerExists
+    /// Set while the saved installer is missing on a set-up Mac and the
+    /// background download has not succeeded yet (nil = not attempted / ok).
+    var installerFetchError: String?
+    var fetchingInstaller = false
     var state = InstallerState.load()
     var vaults: [LocalVault] = []
     var platformVersion: String?
@@ -25,7 +33,9 @@ final class AppModel {
     /// Re-read local state. The update check hits the network, so it only
     /// repeats after `checkInterval` unless `forceCheck` (after an installer run).
     func refresh(forceCheck: Bool = false) {
+        platformPresent = Bootstrap.platformExists
         installerPresent = Bootstrap.installerExists
+        if platformPresent && !installerPresent { Task { await ensureInstaller() } }
         state = InstallerState.load()
         vaults = VaultScanner.scan(state)
         platformPluginVersion = VaultScanner.manifestVersion(at: Shell.hubleHome + "/platform/huble-pipeline/dist/atlas-cx/manifest.json")
@@ -35,6 +45,24 @@ final class AppModel {
     }
 
     static let checkInterval: TimeInterval = 30 * 60
+
+    /// Platform present, saved installer missing (pre-v1 install): fetch the
+    /// installer silently. Download only — nothing runs. On failure the main
+    /// window shows a banner with Retry and the installer-driven actions stay
+    /// disabled; the Mac is never shown as fresh.
+    func ensureInstaller() async {
+        guard platformPresent, !installerPresent, !fetchingInstaller else { return }
+        fetchingInstaller = true
+        defer { fetchingInstaller = false }
+        do {
+            try await Bootstrap.downloadInstaller()
+            installerPresent = Bootstrap.installerExists
+            installerFetchError = installerPresent ? nil : "Downloaded, but ~/.huble/install.sh is still not readable."
+            if installerPresent { await checkForUpdates() }
+        } catch {
+            installerFetchError = error.localizedDescription
+        }
+    }
 
     func checkForUpdates() async {
         guard !checkingUpdates else { return }
@@ -61,7 +89,7 @@ final class AppModel {
         defer { bootstrapping = false }
         do {
             if !Bootstrap.installerExists { try await Bootstrap.downloadInstaller() }
-            installerPresent = true
+            installerPresent = Bootstrap.installerExists
             run(.setup())
         } catch {
             bootstrapError = error.localizedDescription

@@ -1,19 +1,24 @@
 #!/bin/bash
-# Build Huble.app from the SwiftPM package.
+# Build Huble.app (universal: arm64 + x86_64) from the SwiftPM package and
+# zip it for a GitHub release.
 #
-#   scripts/build-app.sh                       ad-hoc signed (runs on this Mac only)
-#   scripts/build-app.sh --sign "Developer ID Application: Huble (TEAMID)"
-#   scripts/build-app.sh --sign "..." --notarize <notarytool keychain profile>
+#   scripts/build-app.sh --version 0.1.1                       ad-hoc signed (runs on this Mac only)
+#   scripts/build-app.sh --version 0.1.1 --sign "Developer ID Application: Huble (TEAMID)"
+#   scripts/build-app.sh --version 0.1.1 --sign "..." --notarize <notarytool keychain profile>
 #
+# --version is required (or HUBLE_APP_VERSION in the environment): the
+# version goes into Info.plist and the zip name, and a stale default would
+# ship the wrong number. Output: build/Huble.app and
+# build/Huble-<version>-universal.zip (+ its SHA-256 on stdout).
 # Drop a 1024x1024 app/Icon.png next to Package.swift to get an app icon.
 set -euo pipefail
 
 APP_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 SIGN_IDENTITY=""
 NOTARIZE_PROFILE=""
-VERSION="0.1.0"
+VERSION="${HUBLE_APP_VERSION:-}"
 
-usage() { sed -n '2,8p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'; }
 while [ $# -gt 0 ]; do
   case "$1" in
     --sign) SIGN_IDENTITY="$2"; shift 2 ;;
@@ -23,18 +28,27 @@ while [ $# -gt 0 ]; do
     *) echo "unknown option: $1" >&2; usage >&2; exit 2 ;;
   esac
 done
+if [ -z "$VERSION" ]; then
+  echo "--version X.Y.Z is required (or set HUBLE_APP_VERSION)" >&2; usage >&2; exit 2
+fi
+case "$VERSION" in
+  [0-9]*.[0-9]*.[0-9]*) ;;
+  *) echo "--version must look like X.Y.Z (got '$VERSION')" >&2; exit 2 ;;
+esac
 if [ -n "$NOTARIZE_PROFILE" ] && [ -z "$SIGN_IDENTITY" ]; then
   echo "--notarize needs --sign (Apple only notarizes Developer ID signed apps)" >&2; exit 2
 fi
 
 cd "$APP_DIR"
-echo "==> swift build (release)"
-swift build -c release
-BIN="$(swift build -c release --show-bin-path)/Huble"
+echo "==> swift build (release, universal arm64 + x86_64)"
+swift build -c release --arch arm64 --arch x86_64
+BIN="$(swift build -c release --arch arm64 --arch x86_64 --show-bin-path)/Huble"
 [ -x "$BIN" ] || { echo "binary not found at $BIN" >&2; exit 1; }
+lipo -info "$BIN" | grep -q 'x86_64' && lipo -info "$BIN" | grep -q 'arm64' \
+  || { echo "binary is not universal: $(lipo -info "$BIN")" >&2; exit 1; }
 
 BUNDLE="$APP_DIR/build/Huble.app"
-echo "==> assembling $BUNDLE"
+echo "==> assembling $BUNDLE ($VERSION)"
 rm -rf "$BUNDLE"
 mkdir -p "$BUNDLE/Contents/MacOS" "$BUNDLE/Contents/Resources"
 cp "$BIN" "$BUNDLE/Contents/MacOS/Huble"
@@ -99,18 +113,20 @@ else
   codesign --force --deep -s - "$BUNDLE"
 fi
 
+ZIP="$APP_DIR/build/Huble-$VERSION-universal.zip"
 if [ -n "$NOTARIZE_PROFILE" ]; then
-  ZIP="$APP_DIR/build/Huble.zip"
   echo "==> notarizing"
   rm -f "$ZIP"
-  ditto -c -k --keepParent "$BUNDLE" "$ZIP"
+  ditto -c -k --sequesterRsrc --keepParent "$BUNDLE" "$ZIP"
   xcrun notarytool submit "$ZIP" --keychain-profile "$NOTARIZE_PROFILE" --wait
   xcrun stapler staple "$BUNDLE"
-  rm -f "$ZIP"
-  # Ship this zip: it carries the stapled ticket.
-  ditto -c -k --keepParent "$BUNDLE" "$ZIP"
-  echo "notarized zip: $ZIP"
 fi
+# The shipped zip is made AFTER signing (and stapling): it carries the ticket.
+rm -f "$ZIP"
+ditto -c -k --sequesterRsrc --keepParent "$BUNDLE" "$ZIP"
 
 codesign -dv "$BUNDLE" 2>&1 | sed -n '1,3p'
+lipo -info "$BUNDLE/Contents/MacOS/Huble"
 echo "built: $BUNDLE"
+echo "zip:   $ZIP"
+echo "sha256: $(shasum -a 256 "$ZIP" | cut -d' ' -f1)"

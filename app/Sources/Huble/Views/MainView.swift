@@ -6,6 +6,7 @@ struct MainView: View {
     var body: some View {
         @Bindable var model = model
         VStack(spacing: 0) {
+            if !model.installerPresent { installerBanner }
             if model.vaults.isEmpty {
                 ContentUnavailableView {
                     Label("No projects on this Mac", systemImage: "folder")
@@ -28,8 +29,11 @@ struct MainView: View {
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
                 Button { model.showNewProject = true } label: { Label("New project", systemImage: "plus") }
+                    .disabled(!model.installerPresent)
                 Button { model.showCloneProject = true } label: { Label("Clone project", systemImage: "icloud.and.arrow.down") }
+                    .disabled(!model.installerPresent)
                 Button { model.showOpenProject = true } label: { Label("Open project", systemImage: "folder") }
+                    .disabled(!model.installerPresent)
             }
         }
         .sheet(isPresented: $model.showNewProject) {
@@ -43,6 +47,32 @@ struct MainView: View {
         }
     }
 
+    /// Platform on this Mac but no saved installer yet (set up before contract
+    /// v1): the app fetches it in the background; until then the actions that
+    /// spawn it are disabled with this reason.
+    private var installerBanner: some View {
+        HStack(spacing: 10) {
+            if model.fetchingInstaller {
+                ProgressView().controlSize(.small)
+                Text("Installer not on this Mac yet — downloading…")
+            } else if let err = model.installerFetchError {
+                Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                Text("Installer not on this Mac yet — \(err)")
+                    .lineLimit(2)
+                Spacer()
+                Button("Retry") { Task { await model.ensureInstaller() } }
+            } else {
+                ProgressView().controlSize(.small)
+                Text("Installer not on this Mac yet — retrying…")
+            }
+        }
+        .font(.callout)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.orange.opacity(0.12))
+    }
+
     /// "Update platform" appears only when `--check` reports an update; a
     /// blocked checkout shows why; offline shows a quiet note. Same rule as
     /// the Atlas plugin's Get Started page.
@@ -52,16 +82,19 @@ struct MainView: View {
             Label(model.githubLogin.map { "GitHub: \($0)" } ?? "GitHub: not signed in", systemImage: "person.crop.circle")
             Spacer()
             if !model.ghInstalled {
-                Button("Set up GitHub") { model.run(.signInGitHub()) }
+                Button("Set up GitHub") { model.run(.signInGitHub()) }.disabled(!model.installerPresent)
             } else if model.githubLogin == nil {
-                Button("Sign in to GitHub") { model.run(.signInGitHub()) }
+                Button("Sign in to GitHub") { model.run(.signInGitHub()) }.disabled(!model.installerPresent)
             }
-            if model.checkingUpdates && model.updateCheck == nil {
+            if !model.installerPresent {
+                EmptyView()   // the banner above explains; no update check without the installer
+            } else if model.checkingUpdates && model.updateCheck == nil {
                 ProgressView().controlSize(.mini)
             } else if let c = model.updateCheck {
                 if c.updateAvailable {
                     Button("Update platform") { model.run(.updatePlatform()) }
                         .buttonStyle(.borderedProminent)
+                        .disabled(!model.installerPresent)
                 } else if c.blocked {
                     Label("Update blocked: local changes in ~/.huble/platform", systemImage: "exclamationmark.triangle")
                         .foregroundStyle(.orange)
@@ -74,7 +107,7 @@ struct MainView: View {
                     Label("Couldn't check for updates", systemImage: "wifi.slash")
                         .help("No network, or GitHub unreachable. Checked again on the next launch.")
                 }
-            } else if model.installerPresent {
+            } else {
                 Label("Couldn't check for updates", systemImage: "wifi.slash")
             }
         }
@@ -105,7 +138,7 @@ private struct VaultRow: View {
                     .truncationMode(.middle)
             }
             Spacer()
-            Button("Remove…") { confirmRemove = true }
+            Button("Remove…") { confirmRemove = true }.disabled(!model.installerPresent)
             // Only when the vault's installed plugin differs from the one the
             // platform ships (what cx init installs) — equal means nothing to do.
             // Not a sync: it re-installs plugin/skills/commands, nothing else.
@@ -116,6 +149,7 @@ private struct VaultRow: View {
                     // in place, so send the user there instead of running here.
                     if vault.openInObsidian { openVaultNotice = true } else { model.run(.updateVault(path: vault.path)) }
                 }
+                .disabled(!model.installerPresent)
                 .help(vault.pluginVersion.map { "Atlas \($0) installed, platform ships \(model.platformPluginVersion ?? "?"). Re-installs the plugin, skills and commands — does not sync project files." } ?? "Atlas plugin not installed in this vault")
                 .confirmationDialog("“\(vault.name)” is open in Obsidian", isPresented: $openVaultNotice, titleVisibility: .visible) {
                     Button("Open in Obsidian") { Obsidian.open(vaultPath: vault.path) }
