@@ -8,7 +8,7 @@ GitHub, update the platform — all from one window.
 
 ```bash
 cd app
-./scripts/build-app.sh --version 0.1.1   # → app/build/Huble.app (universal) + build/Huble-0.1.1-universal.zip + sha256
+./scripts/build-app.sh --version 0.1.1   # → app/build/Huble.app (universal) + build/Huble-0.1.1-universal.zip + sha256 (0.1.1 is the one release, see below)
 open build/Huble.app
 ```
 
@@ -17,7 +17,9 @@ the zip name. The binary is universal (arm64 + x86_64). Needs Xcode (Swift
 5.9+; built with Xcode 27). No third-party dependencies, no `.xcodeproj` — it
 is a plain SwiftPM package.
 
-Release: build, then `gh release create app-v<version> build/Huble-<version>-universal.zip`.
+Release: there is exactly **one** release, `app-v0.1.1`, overwritten on every
+build (no new tags). Build with `--version 0.1.1`, then replace the asset:
+`gh release upload app-v0.1.1 build/Huble-0.1.1-universal.zip --clobber`.
 
 ## Signing
 

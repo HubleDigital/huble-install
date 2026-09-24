@@ -57,19 +57,6 @@ which is what `cx init` installs; equal means no button.
 | `HUBLE_VAULT_MODE` | `new` / `clone` / `skip` / `remove` | what to do after tooling is verified. Non-interactive default: `skip` |
 | `HUBLE_VAULT_PATH` | absolute vault path | with `remove`: the vault to remove from this Mac (moved to the Trash, forgotten in Obsidian and `installer.json`). **The GitHub repository is never touched.** |
 | `HUBLE_FORCE` | `1` | with `remove`: proceed although the vault has uncommitted / unpushed / never-pushed work. Without it such a vault fails with `reason: "unsynced"`; a client asks the user a second time before setting it. |
-
-`remove` and Obsidian: quitting Obsidian closes every open vault, so the
-installer quits it **only when the vault being removed is open** (then
-relaunches it only if other vaults were open; otherwise Obsidian stays
-closed). A closed vault is trashed without touching Obsidian; its list entry
-is queued in `~/.huble/obsidian-forget.txt` and dropped on the next run that
-finds Obsidian not running (Obsidian rewrites `obsidian.json` from memory on
-quit, so an edit made while it runs would not survive). Clients say this in
-the confirmation before running.
-
-The vault `step` label names the action: `Creating <name>`, `Cloning <repo>`,
-`Updating Atlas in <name>`, `Removing <name> from this Mac`; `skip` with
-`HUBLE_VAULT_REINIT=no` emits no vault step at all.
 | `HUBLE_ROLE` | `cx` / `copy` / `seo` / `design` / `dev` / `all` | machine role for the vault. Required (or stored default) for `new`/`clone` |
 | `HUBLE_VAULTS_DIR` | absolute path | folder that will contain the vault folder |
 | `HUBLE_CLIENT_NAME` | string | with `new`: vault at `$HUBLE_VAULTS_DIR/<name>` |
@@ -85,6 +72,19 @@ The vault `step` label names the action: `Creating <name>`, `Cloning <repo>`,
 In every mode the installer never discards local changes in `~/.huble/platform`:
 a fast-forward that fails on a dirty checkout warns and reports
 `platformUpdate: "failed"` instead of resetting.
+
+`remove` and Obsidian: quitting Obsidian closes every open vault, so the
+installer quits it **only when the vault being removed is open** (then
+relaunches it only if other vaults were open; otherwise Obsidian stays
+closed). A closed vault is trashed without touching Obsidian; its list entry
+is queued in `~/.huble/obsidian-forget.txt` and dropped on the next run that
+finds Obsidian not running (Obsidian rewrites `obsidian.json` from memory on
+quit, so an edit made while it runs would not survive). Clients say this in
+the confirmation before running.
+
+The vault `step` label names the action: `Creating <name>`, `Cloning <repo>`,
+`Updating Atlas in <name>`, `Removing <name> from this Mac`; `skip` with
+`HUBLE_VAULT_REINIT=no` emits no vault step at all.
 
 Values are passed only through the environment, never interpolated into a
 shell string.
