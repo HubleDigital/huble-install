@@ -10,7 +10,7 @@
 # version goes into Info.plist and the zip name, and a stale default would
 # ship the wrong number. Output: build/Huble.app and
 # build/Huble-<version>-universal.zip (+ its SHA-256 on stdout).
-# Drop a 1024x1024 app/Icon.png next to Package.swift to get an app icon.
+# App icon: app/Icon.icns is used as-is; otherwise a 1024x1024 app/Icon.png is scaled into one.
 set -euo pipefail
 
 APP_DIR="$(cd "$(dirname "$0")/.." && pwd)"
@@ -55,7 +55,12 @@ cp "$BIN" "$BUNDLE/Contents/MacOS/Huble"
 printf 'APPL????' > "$BUNDLE/Contents/PkgInfo"
 
 ICON_PLIST=""
-if [ -f "$APP_DIR/Icon.png" ]; then
+if [ -f "$APP_DIR/Icon.icns" ]; then
+  # A finished icon set wins, used as-is (keeps any hand-tuned small sizes).
+  cp "$APP_DIR/Icon.icns" "$BUNDLE/Contents/Resources/AppIcon.icns"
+  ICON_PLIST="	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>"
+elif [ -f "$APP_DIR/Icon.png" ]; then
   ICONSET="$APP_DIR/build/AppIcon.iconset"
   rm -rf "$ICONSET"; mkdir -p "$ICONSET"
   for s in 16 32 128 256 512; do
