@@ -49,10 +49,14 @@ platform run, which also refreshes the saved copy).
 update path refuses to reset such a checkout anyway. `missing` offers setup.
 `unknown` shows nothing or a quiet "couldn't check". Re-check on launch, after
 each installer run and on an interval (the Huble app uses 30 minutes), not on
-every render. "Update vault" is shown only when the vault's installed plugin
-(`<vault>/.obsidian/plugins/atlas-cx/manifest.json` `version`) differs from the
-one the platform ships (`~/.huble/platform/huble-pipeline/dist/atlas-cx/manifest.json`),
-which is what `cx init` installs; equal means no button.
+every render. "Update Atlas in this vault" is shown only when the vault's
+installed plugin (`<vault>/.obsidian/plugins/atlas-cx/manifest.json` `version`)
+is **older** than the one the platform ships
+(`~/.huble/platform/huble-pipeline/dist/atlas-cx/manifest.json`, what
+`cx init` installs). Versions like `2026.9.23-35` are compared numerically
+part by part, split on `.` and `-`, missing parts = 0; a non-numeric part →
+no button; installed newer (a test build) → no button; no installed manifest
+→ button. Same rule in the plugin (`huble-pipeline/scripts/atlas-version.mjs`).
 
 ### Environment
 

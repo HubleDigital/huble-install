@@ -72,9 +72,15 @@ final class AppModel {
         lastCheckAt = Date()
     }
 
+    /// "Update Atlas" only when the installed plugin is OLDER than the one the
+    /// platform ships — never a downgrade (a newer test build stays). Missing
+    /// manifest → update. Same rule as the plugin's Get Started
+    /// (huble-pipeline/scripts/atlas-version.mjs).
     func vaultNeedsUpdate(_ vault: LocalVault) -> Bool {
         guard let shipped = platformPluginVersion else { return false }
-        return vault.pluginVersion != shipped
+        guard let installed = vault.pluginVersion else { return true }
+        guard let cmp = AtlasVersion.compare(installed, shipped) else { return false }
+        return cmp == .orderedAscending
     }
 
     func run(_ action: InstallerAction) {
