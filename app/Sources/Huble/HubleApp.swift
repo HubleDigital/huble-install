@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 @main
@@ -39,5 +40,12 @@ struct RootView: View {
                 })
         }
         .onAppear { model.refresh() }
+        // Vaults change behind the app's back (an Atlas update done from
+        // inside Obsidian, a clone made in a terminal). Rescan every time the
+        // app comes to the front - cheap, local reads only; the network check
+        // stays throttled inside refresh().
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            model.refresh()
+        }
     }
 }

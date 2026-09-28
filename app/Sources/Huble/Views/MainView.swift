@@ -27,6 +27,11 @@ struct MainView: View {
             footer
         }
         .toolbar {
+            ToolbarItem(placement: .navigation) {
+                Button { model.refresh(forceCheck: true) } label: { Label("Refresh", systemImage: "arrow.clockwise") }
+                    .keyboardShortcut("r", modifiers: .command)
+                    .help("Rescan the vaults on this Mac and check for updates (Cmd+R)")
+            }
             ToolbarItemGroup(placement: .primaryAction) {
                 Button { model.showNewProject = true } label: { Label("New project", systemImage: "plus") }
                     .disabled(!model.installerPresent)
